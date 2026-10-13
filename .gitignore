@@ -1,4 +1,4 @@
-models/
+/models
 projects/*
 !projects/.keep
 work/

@@ -11,6 +11,8 @@ Then (long-form defaults, see PROFILES):
   * ranges listed in `protect` are never cut
 """
 import subprocess
+
+import paths
 from dataclasses import dataclass
 
 PROFILES = {
@@ -30,7 +32,7 @@ class CutReport:
 
 def detect_quiet(wav, db=QUIET_DB, min_len=0.4):
     """Quiet stretches of a whole recording. One fast pass over the 16 kHz audio."""
-    r = subprocess.run(["ffmpeg", "-v", "info", "-i", wav, "-af", f"silencedetect=noise={db}dB:d={min_len}",
+    r = subprocess.run([paths.ffmpeg(), "-v", "info", "-i", wav, "-af", f"silencedetect=noise={db}dB:d={min_len}",
                         "-f", "null", "-"], stderr=subprocess.PIPE, text=True)
     out, s = [], None
     for line in r.stderr.splitlines():

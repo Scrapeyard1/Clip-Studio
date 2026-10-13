@@ -5,35 +5,36 @@
     below the stream's title banner and clear of the chat / donation overlays
   * animated word-by-word captions (current word highlighted), Poppins Bold
   * hook text pinned at the top for the whole clip
+  * framing per short: "auto" (host crop, switching to the full frame for screen shares),
+    "host" (always the host crop), "full" (whole frame: Scripture on screen), "split"
+    (whole frame on top, host crop underneath)
 """
-import argparse, json, os, statistics, subprocess, tempfile
+import argparse, json, os, shutil, statistics, tempfile
 import cv2
-from cuts import safe_cuts, remap
+import media
+import paths
+from cuts import safe_cuts
+from timeline import Timeline
 
 OW, OH, FPS = 1080, 1920, 30
-FONT_DIR = "/usr/share/fonts/truetype/google-fonts"
+FRAMINGS = ("auto", "host", "full", "split")
 
 
-def run(cmd):
-    r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-    if r.returncode:
-        raise RuntimeError(r.stderr[-2000:])
-
-
-YUNET = "/home/claude/clipstudio/models/yunet.onnx"
-
-
-def layout_runs(video, pieces, step=0.4):
+def layout_runs(video, pieces, step=0.4, detect_screens=True):
     """Split kept stretches wherever the picture switches between camera and screen share.
     Returns [(start, end, face_x or None)]: face_x is the host's face centre (fraction of width),
     None means screen share (show the whole frame)."""
     cap = cv2.VideoCapture(video)
     W, H = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    det = cv2.FaceDetectorYN.create(YUNET, "", (W, H), 0.7)
+    det = cv2.FaceDetectorYN.create(paths.YUNET, "", (W, H), 0.7)
     runs, hits = [], 0
     for a, b in pieces:
         samples, t = [], a + 0.05
         while t < b:
+            ev = getattr(media.cancel_event, "ev", None)
+            if ev is not None and ev.is_set():          # Stop works during face scanning too
+                cap.release()
+                raise media.Cancelled()
             cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
             ok, fr = cap.read()
             if ok:
@@ -47,7 +48,7 @@ def layout_runs(video, pieces, step=0.4):
                     # no face: a screen share is mostly bright page; otherwise he just turned or covered
                     # his face, so keep the camera framing (marked "keep" and filled in below)
                     g = cv2.cvtColor(fr[int(H * .12):, :int(W * .8)], cv2.COLOR_BGR2GRAY)
-                    x = None if (g > 190).mean() > 0.25 else "keep"
+                    x = None if detect_screens and (g > 190).mean() > 0.25 else "keep"
                 samples.append((t, x))
             t += step
         # "keep" = camera without a visible face: borrow the nearest real face position
@@ -129,74 +130,95 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 else:
                     txt.append(word)
             ev.append(f"Dialogue: 0,{ass_time(a)},{ass_time(b)},Cap,,0,0,0,,{' '.join(txt)}")
-    open(path, "w").write(head + "\n".join(ev) + "\n")
+    open(path, "w", encoding="utf-8").write(head + "\n".join(ev) + "\n")
+
+
+def _piece_filter(i, x0, mode, cw, ch, top, W, H):
+    if mode == "split":         # whole frame on top, host underneath
+        fh = int(OW * H / W) // 2 * 2
+        bh = OH - fh
+        bw = int(ch * OW / bh) // 2 * 2
+        bx = int(min(max((x0 if x0 is not None else (W - bw) / 2) + cw / 2 - bw / 2, 0), W - bw)) // 2 * 2
+        return (f"[{i}:v]split[t{i}][b{i}];[t{i}]scale={OW}:{fh}:flags=lanczos[tt{i}];"
+                f"[b{i}]crop={min(bw, W)}:{ch}:{bx}:{top},scale={OW}:{bh}:flags=lanczos[bb{i}];"
+                f"[tt{i}][bb{i}]vstack,setsar=1,setpts=PTS-STARTPTS[v{i}]")
+    if x0 is not None:          # host crop, 9:16
+        return (f"[{i}:v]crop={cw}:{ch}:{x0}:{top},scale={OW}:{OH}:flags=lanczos,setsar=1,"
+                f"setpts=PTS-STARTPTS[v{i}]")
+    # whole frame, readable, over a blurred fill (screen share / Scripture)
+    return (f"[{i}:v]split[bg{i}][fg{i}];[bg{i}]scale=-2:{OH},crop={OW}:{OH},boxblur=24:2,"
+            f"eq=brightness=-0.15[bb{i}];[fg{i}]scale={OW}:-2:flags=lanczos[ff{i}];"
+            f"[bb{i}][ff{i}]overlay=(W-w)/2:(H-h)/2-120,setsar=1,setpts=PTS-STARTPTS[v{i}]")
+
+
+def render(video, transcript, clip, out_dir, quiet=None, crop_top=0.125):
+    """clip: {name, hook, pieces[[a,b]], framing}. Returns {"video": path, ...stats}."""
+    os.makedirs(out_dir, exist_ok=True)
+    mode = clip.get("framing", "auto")
+    if mode not in FRAMINGS:
+        mode = "auto"
+    src = media.probe(video)
+    W, H = src["width"], src["height"]
+    keep = []
+    for s, e in clip["pieces"]:
+        keep += safe_cuts(transcript, s, e, "short", clip.get("protect", []), quiet).keep
+    if mode == "full":
+        runs, nfaces = [(a, b, None) for a, b in keep], 0
+    else:
+        runs, nfaces = layout_runs(video, keep, detect_screens=(mode == "auto"))
+    top = int(H * crop_top) // 2 * 2
+    ch = (H - top) // 2 * 2
+    cw = int(ch * 9 / 16) // 2 * 2
+    x0s = [None if c is None else int(min(max(c * W - cw / 2, 0), W - cw)) // 2 * 2 for _, _, c in runs]
+    for i in range(1, len(x0s)):          # ignore small drifts: only reframe when he really moves
+        if x0s[i] is not None and x0s[i - 1] is not None and abs(x0s[i] - x0s[i - 1]) < cw * 0.15:
+            x0s[i] = x0s[i - 1]
+
+    tl = Timeline(src["fps"])
+    for a, b, _ in runs:
+        tl.add_source("body", a, b)
+    total = tl.seconds
+    work = tempfile.mkdtemp(prefix="short-", dir=out_dir)
+    try:
+        ass = os.path.join(work, "caps.ass")
+        build_ass(ass, tl.words_on_output(transcript), clip["hook"], total)
+        cmd, fc, parts = [paths.ffmpeg(), "-y"], [], []
+        for i, seg in enumerate(tl.segments):
+            a, b = tl.src_seconds(seg)
+            cmd += ["-ss", f"{a:.6f}", "-t", f"{b - a:.6f}", "-i", video]
+            f = min(0.015, (b - a) / 4)
+            fc.append(_piece_filter(i, x0s[i], mode, cw, ch, top, W, H))
+            fc.append(f"[{i}:a]aresample=48000,asetpts=PTS-STARTPTS,afade=t=in:d={f:.3f},"
+                      f"afade=t=out:st={b - a - f:.3f}:d={f:.3f}[a{i}]")
+            parts.append(f"[v{i}][a{i}]")
+        fc.append(f"{''.join(parts)}concat=n={len(tl.segments)}:v=1:a=1[cv][ca]")
+        fc.append(f"[cv]fps={FPS},ass='{paths.ffmpeg_filter_path(ass)}':fontsdir='{paths.ffmpeg_filter_path(paths.FONTS)}',"
+                  f"format=yuv420p[v]")
+        fc.append("[ca]loudnorm=I=-14:TP=-1.5:LRA=11[a]")
+        script = os.path.join(work, "filter.txt")
+        open(script, "w", encoding="utf-8").write(";\n".join(fc))
+        final = os.path.join(out_dir, f"{clip['name']}.mp4")
+        tmp = media.tmp_name(final)
+        media.run(cmd + ["-filter_complex_script", script, "-map", "[v]", "-map", "[a]", "-c:v", "libx264",
+                         "-preset", "medium", "-crf", "20", "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
+                         "-movflags", "+faststart", tmp])
+        media.commit(tmp, final)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return {"video": final, "seconds": round(total, 1), "pieces": len(tl.segments), "face_hits": nfaces,
+            "framing": mode, "screen_share_pieces": sum(x is None for x in x0s)}
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--video", required=True); ap.add_argument("--transcript", required=True)
-    ap.add_argument("--clip", required=True, help="JSON: name, hook, pieces[[a,b]]")
+    ap.add_argument("--clip", required=True, help="JSON: name, hook, pieces[[a,b]], framing")
     ap.add_argument("--out", required=True)
     ap.add_argument("--quiet", help="quiet.json (protects sound effects)")
     ap.add_argument("--crop-top", type=float, default=0.125, help="fraction of height to skip (title banner)")
     a = ap.parse_args()
-    clip, tr = json.load(open(a.clip)), json.load(open(a.transcript))
-    os.makedirs(a.out, exist_ok=True)
-    work = tempfile.mkdtemp(dir=a.out)
-
     quiet = json.load(open(a.quiet)) if a.quiet else None
-    keep = []
-    for s, e in clip["pieces"]:
-        keep += safe_cuts(tr, s, e, "short", quiet=quiet).keep
-    total = sum(b - x for x, b in keep)
-
-    cap = cv2.VideoCapture(a.video)
-    W, H = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    runs, nfaces = layout_runs(a.video, keep)
-    keep = [(x, y) for x, y, _ in runs]
-    centers = [c for _, _, c in runs]
-    top = int(H * a.crop_top) // 2 * 2
-    ch = (H - top) // 2 * 2
-    cw = int(ch * 9 / 16) // 2 * 2
-    x0s = [None if c is None else int(min(max(c * W - cw / 2, 0), W - cw)) // 2 * 2 for c in centers]
-    for i in range(1, len(x0s)):          # ignore small drifts: only reframe when he really moves
-        if x0s[i] is not None and x0s[i - 1] is not None and abs(x0s[i] - x0s[i - 1]) < cw * 0.15:
-            x0s[i] = x0s[i - 1]
-
-    # words on the output timeline
-    words, off = [], 0.0
-    for ka, kb in keep:
-        for s in tr["segments"]:
-            for w in s["words"]:
-                if ka <= w["s"] < kb:
-                    words.append({"w": w["w"], "s": off + w["s"] - ka, "e": off + min(w["e"], kb) - ka})
-        off += kb - ka
-    ass = os.path.join(work, "caps.ass")
-    build_ass(ass, words, clip["hook"], total)
-
-    cmd, fc, parts = ["ffmpeg", "-y"], [], []
-    for i, (s, e) in enumerate(keep):
-        cmd += ["-ss", f"{s:.3f}", "-t", f"{e - s:.3f}", "-i", a.video]
-        f = min(0.015, (e - s) / 4)
-        if x0s[i] is not None:      # face layout: 9:16 crop around the host
-            fc.append(f"[{i}:v]crop={cw}:{ch}:{x0s[i]}:{top},scale={OW}:{OH}:flags=lanczos,setsar=1,"
-                      f"setpts=PTS-STARTPTS[v{i}]")
-        else:                       # screen-share layout: whole frame, readable, over a blurred fill
-            fc.append(f"[{i}:v]split[bg{i}][fg{i}];[bg{i}]scale=-2:{OH},crop={OW}:{OH},boxblur=24:2,"
-                      f"eq=brightness=-0.15[bb{i}];[fg{i}]scale={OW}:-2:flags=lanczos[ff{i}];"
-                      f"[bb{i}][ff{i}]overlay=(W-w)/2:(H-h)/2-120,setsar=1,setpts=PTS-STARTPTS[v{i}]")
-        fc.append(f"[{i}:a]aresample=48000,asetpts=PTS-STARTPTS,afade=t=in:d={f:.3f},afade=t=out:st={e-s-f:.3f}:d={f:.3f}[a{i}]")
-        parts.append(f"[v{i}][a{i}]")
-    fc.append(f"{''.join(parts)}concat=n={len(keep)}:v=1:a=1[cv][ca]")
-    fc.append(f"[cv]fps={FPS},"
-              f"ass={ass}:fontsdir={FONT_DIR},format=yuv420p[v]")
-    fc.append("[ca]loudnorm=I=-14:TP=-1.5:LRA=11[a]")
-    final = os.path.join(a.out, f"{clip['name']}.mp4")
-    run(cmd + ["-filter_complex", ";".join(fc), "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "medium",
-               "-crf", "20", "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-movflags", "+faststart", final])
-    print(json.dumps({"out": final, "seconds": round(total, 1), "pieces": len(keep), "face_hits": nfaces,
-                      "crop": [cw, ch, top], "x_positions": sorted({x for x in x0s if x is not None}),
-                      "screen_share_pieces": sum(x is None for x in x0s)}))
+    print(json.dumps(render(a.video, json.load(open(a.transcript)), json.load(open(a.clip)), a.out, quiet, a.crop_top)))
 
 
 if __name__ == "__main__":

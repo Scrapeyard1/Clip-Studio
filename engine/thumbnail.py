@@ -17,9 +17,10 @@ import cv2
 import onnxruntime as ort
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageEnhance
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FONTS = os.path.join(ROOT, "assets", "fonts")
-SEG_MODEL = os.path.join(ROOT, "models", "u2net_human_seg.onnx")
+import paths
+
+FONTS = paths.FONTS
+SEG_MODEL = paths.U2NET
 W, H = 1280, 720
 YELLOW, RED, WHITE, BLACK = (255, 214, 0), (226, 32, 38), (255, 255, 255), (12, 12, 14)
 _sess = None

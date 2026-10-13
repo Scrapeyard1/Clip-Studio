@@ -6,7 +6,7 @@ chapters Claude writes line up with the uploaded video, not the raw live.
 Needs ANTHROPIC_API_KEY.
 """
 import json
-from cuts import remap
+from timeline import chapter_stamp
 
 STYLE = """You write YouTube packaging for "Elijah Johnson Apologetics" (Christian apologetics; callers
 challenge Elijah live: Muslims, Jehovah's Witnesses, atheists, Hebrew Israelites, Catholics, Oneness, etc.).
@@ -35,26 +35,50 @@ Return ONLY JSON:
  "pinned_comment": one question that invites debate in the comments}"""
 
 
-def final_timeline_transcript(transcript, cold_open, sting_len, keep):
-    """Transcript lines stamped with times on the finished video."""
-    lines, off = [], 0.0
-    for a, b in cold_open:
-        off += b - a
-    body0 = off + sting_len
+def final_timeline_transcript(transcript, timeline):
+    """Transcript lines stamped with their time on the finished video (from the saved timeline)."""
+    lines = []
     for s in transcript["segments"]:
-        t = remap(s["start"], keep)
-        if t is None:
-            continue
-        T = body0 + t
-        lines.append(f"[{int(T // 60):02d}:{int(T % 60):02d}] {s['text']}")
+        t = timeline.to_output(s["start"], kinds=("body",))
+        if t is not None:
+            lines.append(f"[{chapter_stamp(t)}] {s['text']}")
     return "\n".join(lines)
 
 
-def write(transcript, plan, keep, sting_len=3.0, model="claude-sonnet-5-5"):
+def _secs(stamp):
+    parts = [int(p) for p in str(stamp).split(":")]
+    return sum(p * 60 ** i for i, p in enumerate(reversed(parts)))
+
+
+def clean_chapters(chapters, timeline):
+    """YouTube's rules: first chapter at 0:00, increasing, at least 10 s apart, inside the video."""
+    out, last = [], -10
+    body0 = timeline.body_start()
+    for c in chapters or []:
+        try:
+            t, label = _secs(c[0]), str(c[1])[:60]
+        except (ValueError, TypeError, IndexError):
+            continue
+        if t >= timeline.seconds - 5 or t - last < 10:
+            continue
+        out.append([chapter_stamp(t), label]); last = t
+    if not out or out[0][0] not in ("00:00", "0:00:00"):
+        out.insert(0, ["00:00", "Cold open"])
+    if body0 and all(abs(_secs(c[0]) - body0) > 10 for c in out):
+        out.insert(1, [chapter_stamp(body0), "The conversation"])
+    return out
+
+
+def write(transcript, item, timeline, model="claude-sonnet-5-5"):
     import anthropic
-    text = final_timeline_transcript(transcript, plan["cold_open"], sting_len, keep)
+    text = final_timeline_transcript(transcript, timeline)
     msg = anthropic.Anthropic().messages.create(
         model=model, max_tokens=4000, system=STYLE,
-        messages=[{"role": "user", "content": f"Guest: {plan.get('guest', 'caller')}\n\n{text}"}])
+        messages=[{"role": "user", "content": f"Guest: {item.get('guest', 'caller')}\n"
+                   f"The video is {chapter_stamp(timeline.seconds)} long; the cold open runs until "
+                   f"{chapter_stamp(timeline.body_start())}.\n\n{text}"}])
     out = "".join(b.text for b in msg.content if b.type == "text")
-    return json.loads(out[out.index("{"): out.rindex("}") + 1])
+    data = json.loads(out[out.index("{"): out.rindex("}") + 1])
+    data["chapters"] = clean_chapters(data.get("chapters"), timeline)
+    data["titles"] = [str(t)[:100] for t in data.get("titles", [])][:3]
+    return data

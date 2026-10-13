@@ -5,24 +5,25 @@ Streams the file in chunks so memory stays flat for multi-hour recordings
 
 Output JSON: {"duration": s, "segments": [{"start","end","text","words":[{"w","s","e"}]}]}
 """
-import argparse, json, sys, time, wave
+import argparse, json, os, sys, time, wave
 import numpy as np
 import sherpa_onnx
 
-MODELS = "/home/claude/clipstudio/models"
+import paths
 
 
 def make_recognizer(threads):
-    d = f"{MODELS}/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
+    d = paths.PARAKEET_DIR
+    j = lambda f: os.path.join(d, f)
     return sherpa_onnx.OfflineRecognizer.from_transducer(
-        encoder=f"{d}/encoder.int8.onnx", decoder=f"{d}/decoder.int8.onnx",
-        joiner=f"{d}/joiner.int8.onnx", tokens=f"{d}/tokens.txt",
+        encoder=j("encoder.int8.onnx"), decoder=j("decoder.int8.onnx"),
+        joiner=j("joiner.int8.onnx"), tokens=j("tokens.txt"),
         num_threads=threads, model_type="nemo_transducer", decoding_method="greedy_search")
 
 
 def make_vad():
     cfg = sherpa_onnx.VadModelConfig()
-    cfg.silero_vad.model = f"{MODELS}/silero_vad.onnx"
+    cfg.silero_vad.model = paths.SILERO
     cfg.silero_vad.threshold = 0.4
     cfg.silero_vad.min_silence_duration = 0.35
     cfg.silero_vad.min_speech_duration = 0.2
@@ -95,7 +96,10 @@ def main():
         el = time.time() - t0
         print(f"{fed/16000:7.0f}s / {total:.0f}s  speed {fed/16000/el:5.1f}x", flush=True)
     vad.flush(); drain()
-    json.dump({"duration": total, "segments": segs}, open(a.out, "w"))
+    tmp = a.out + ".partial"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"duration": total, "segments": segs}, f)
+    os.replace(tmp, a.out)
     print("done", len(segs), "segments", flush=True)
 
 

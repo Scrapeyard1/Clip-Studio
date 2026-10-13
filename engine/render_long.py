@@ -5,171 +5,183 @@
   -> the conversation with safe cuts only
   -> outro (your Patreon outro file, or a placeholder card)
 
-Also writes:
-  * <name>.srt  captions on the final timeline (upload to YouTube as a caption track)
-  * <name>.edl  CMX3600 edit list of the body cuts, opens in Premiere / DaVinci Resolve
-  * <name>.cuts.json  every removed stretch with its reason, for the review queue
+Everything is cut from ONE Timeline (engine/timeline.py), frame-exact at the recording's own
+frame rate, and the same Timeline writes the captions, the Resolve/Premiere XML and (later)
+the chapters. Outputs, all validated before they're saved:
+  <name>.mp4  <name>.srt  <name>.xml  <name>.timeline.json  <name>.cuts.json
 
-Never loads the video into memory: each piece is decoded from a seek point,
-so a 5 GB source costs no more RAM than a 500 MB one.
+Never loads the video into memory: each piece is decoded from a seek point.
 """
-import argparse, json, os, subprocess, tempfile
-from cuts import safe_cuts, remap
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
 import export_timeline
+import media
+import paths
+from cuts import safe_cuts
+from timeline import Timeline, write_srt
 
-FONT = "/usr/share/fonts/truetype/google-fonts/Poppins-Bold.ttf"
-
-
-def probe(path):
-    out = subprocess.check_output(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-                                   "stream=width,height,r_frame_rate", "-of", "json", path])
-    s = json.loads(out)["streams"][0]
-    n, d = map(int, s["r_frame_rate"].split("/"))
-    return s["width"], s["height"], n / d
+CARD_SECONDS = {"sting": 3.0, "outro": 4.0}
 
 
-def run(cmd):
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+_auto = None
+
+
+def auto_encoder():
+    """On a Mac, use the built-in hardware encoder (much faster on M1) when this FFmpeg has it."""
+    global _auto
+    if _auto is None:
+        _auto = ""
+        if sys.platform == "darwin":
+            try:
+                out = subprocess.run([paths.ffmpeg(), "-hide_banner", "-encoders"], capture_output=True, text=True).stdout
+                _auto = "videotoolbox" if "h264_videotoolbox" in out else ""
+            except OSError:
+                pass
+    return _auto
 
 
 def enc_args(cfg):
-    if cfg.get("encoder") == "videotoolbox":       # Apple Silicon Macs
+    enc = cfg.get("encoder") or auto_encoder()
+    if enc == "videotoolbox":       # Apple Silicon Macs
         return ["-c:v", "h264_videotoolbox", "-b:v", cfg.get("bitrate", "12M")]
-    if cfg.get("encoder") == "amf":                # AMD GPUs on Windows
+    if enc == "amf":                # AMD GPUs on Windows
         return ["-c:v", "h264_amf", "-quality", "quality", "-b:v", cfg.get("bitrate", "12M")]
     return ["-c:v", "libx264", "-preset", cfg.get("preset", "veryfast"), "-crf", str(cfg.get("crf", 20))]
 
 
 def norm(W, H, fps):
-    return f"scale={W}:{H}:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,fps={fps},format=yuv420p"
+    return (f"scale={W}:{H}:force_original_aspect_ratio=decrease,pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,"
+            f"fps={media.fps_str(fps)},format=yuv420p")
 
 
-def card(path, text, sub, secs, W, H, fps, cfg, riser=False):
-    """Placeholder sting / outro card until the real file is supplied."""
+def _secs(frames, fps):
+    return f"{float(frames / fps):.6f}"
+
+
+def card(path, text, sub, frames, W, H, fps, cfg):
+    """Placeholder sting / outro card until the real file is set in Settings."""
+    secs = float(frames / fps)
+    font = paths.ffmpeg_filter_path(paths.CAPTION_FONT)
     fs = int(H / 12)
-    vf = (f"drawtext=fontfile={FONT}:text='{text}':fontcolor=white:fontsize={fs}:x=(w-tw)/2:y=(h-th)/2-{fs//2},"
-          f"drawtext=fontfile={FONT}:text='{sub}':fontcolor=0xBBBBBB:fontsize={fs//3}:x=(w-tw)/2:y=(h/2)+{fs},"
-          f"fade=t=in:d=0.3,fade=t=out:st={secs-0.3}:d=0.3")
-    a = (f"aevalsrc='0.12*sin(2*PI*(200+600*t/{secs})*t)*min(1,t*4)*min(1,({secs}-t)*3)':s=48000:d={secs}"
-         if riser else f"anullsrc=r=48000:cl=stereo:d={secs}")
-    run(["ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c=0x111111:s={W}x{H}:r={fps}:d={secs}", "-f", "lavfi", "-i", a,
-         "-vf", vf, "-ac", "2", *enc_args(cfg), "-c:a", "pcm_s16le", "-shortest", path])
+    vf = (f"drawtext=fontfile='{font}':text='{text}':fontcolor=white:fontsize={fs}:x=(w-tw)/2:y=(h-th)/2-{fs // 2},"
+          f"drawtext=fontfile='{font}':text='{sub}':fontcolor=0xBBBBBB:fontsize={fs // 3}:x=(w-tw)/2:y=(h/2)+{fs},"
+          f"fade=t=in:d=0.3,fade=t=out:st={secs - 0.3:.3f}:d=0.3")
+    media.run([paths.ffmpeg(), "-y", "-f", "lavfi", "-i", f"color=c=0x111111:s={W}x{H}:r={media.fps_str(fps)}",
+               "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-vf", vf, "-frames:v", str(frames),
+               "-t", f"{secs:.6f}", "-ac", "2", *enc_args(cfg), "-c:a", "pcm_s16le", path])
 
 
-def file_piece(path, src, W, H, fps, cfg):
-    run(["ffmpeg", "-y", "-i", src, "-vf", norm(W, H, fps), "-af", "aresample=48000", "-ac", "2",
-         *enc_args(cfg), "-c:a", "pcm_s16le", path])
+def file_piece(path, src, frames, W, H, fps, cfg):
+    media.run([paths.ffmpeg(), "-y", "-i", src, "-vf", norm(W, H, fps), "-af", "aresample=48000", "-ac", "2",
+               "-frames:v", str(frames), "-t", _secs(frames, fps), *enc_args(cfg), "-c:a", "pcm_s16le", path])
 
 
-def clips_piece(path, video, clips, W, H, fps, cfg):
-    """Several short clips back to back, each with 0.12 s audio fades so joins never click."""
-    cmd, parts = ["ffmpeg", "-y"], []
-    for a, b in clips:
-        cmd += ["-ss", f"{a:.3f}", "-t", f"{b - a:.3f}", "-i", video]
-    fc = []
-    for i, (a, b) in enumerate(clips):
-        d = b - a
-        fc.append(f"[{i}:v]{norm(W, H, fps)},setpts=PTS-STARTPTS[v{i}]")
-        fc.append(f"[{i}:a]aresample=48000,asetpts=PTS-STARTPTS,afade=t=in:d=0.12,afade=t=out:st={d-0.12:.3f}:d=0.12[a{i}]")
-        parts.append(f"[v{i}][a{i}]")
-    fc.append(f"{''.join(parts)}concat=n={len(clips)}:v=1:a=1[v][a]")
-    run(cmd + ["-filter_complex", ";".join(fc), "-map", "[v]", "-map", "[a]", "-ac", "2",
-               *enc_args(cfg), "-c:a", "pcm_s16le", path])
+def source_piece(path, video, segs, W, H, fps, cfg, workdir):
+    """Several stretches of the recording back to back. One decode pass when they're in order
+    (the conversation), one input per stretch when they jump around (the cold open).
+    Frame-exact: every trim is given in whole source frames."""
+    ordered = all(a["out_f"] <= b["in_f"] for a, b in zip(segs, segs[1:]))
+    inputs, fc, parts = [], [], []
+    if ordered:
+        pre_f = max(0, segs[0]["in_f"] - round(2 * fps))
+        inputs = ["-ss", _secs(pre_f, fps), "-t", _secs(segs[-1]["out_f"] - pre_f + round(fps), fps), "-i", video]
+        n = len(segs)
+        fc.append(f"[0:v]{norm(W, H, fps)},split={n}" + "".join(f"[vs{i}]" for i in range(n)))
+        fc.append(f"[0:a]aresample=48000,asplit={n}" + "".join(f"[as{i}]" for i in range(n)))
+        for i, s in enumerate(segs):
+            a, b = s["in_f"] - pre_f, s["out_f"] - pre_f
+            fc.append(f"[vs{i}]trim=start_frame={a}:end_frame={b},setpts=PTS-STARTPTS[v{i}]")
+            fc.append(_atrim(f"as{i}", a, b, fps, i))
+            parts.append(f"[v{i}][a{i}]")
+    else:
+        for i, s in enumerate(segs):
+            inputs += ["-ss", _secs(s["in_f"], fps), "-i", video]
+            n_f = s["out_f"] - s["in_f"]
+            fc.append(f"[{i}:v]{norm(W, H, fps)},trim=end_frame={n_f},setpts=PTS-STARTPTS[v{i}]")
+            fc.append(f"[{i}:a]aresample=48000,asetpts=PTS-STARTPTS,atrim=end={_secs(n_f, fps)},"
+                      f"afade=t=in:d=0.12,afade=t=out:st={float(n_f / fps) - 0.12:.4f}:d=0.12[a{i}]")
+            parts.append(f"[v{i}][a{i}]")
+    fc.append(f"{''.join(parts)}concat=n={len(segs)}:v=1:a=1[v][a]")
+    script = os.path.join(workdir, f"filter_{os.path.basename(path)}.txt")
+    open(script, "w", encoding="utf-8").write(";\n".join(fc))
+    media.run([paths.ffmpeg(), "-y", *inputs, "-filter_complex_script", script, "-map", "[v]", "-map", "[a]",
+               "-ac", "2", *enc_args(cfg), "-c:a", "pcm_s16le", path])
 
 
-def body_piece(path, video, start, end, keep, W, H, fps, cfg, workdir):
-    """The conversation with silences removed: one decode pass, trim + concat per kept stretch."""
-    pre = max(0.0, start - 2.0)
-    fc = [f"[0:v]{norm(W, H, fps)},split={len(keep)}" + "".join(f"[vs{i}]" for i in range(len(keep))),
-          "[0:a]aresample=48000,asplit=" + str(len(keep)) + "".join(f"[as{i}]" for i in range(len(keep)))]
-    parts = []
-    for i, (a, b) in enumerate(keep):
-        a0, b0 = a - pre, b - pre
-        f = min(0.02, (b - a) / 4)
-        fc.append(f"[vs{i}]trim=start={a0:.3f}:end={b0:.3f},setpts=PTS-STARTPTS[v{i}]")
-        fc.append(f"[as{i}]atrim=start={a0:.3f}:end={b0:.3f},asetpts=PTS-STARTPTS,"
-                  f"afade=t=in:d={f:.3f},afade=t=out:st={b-a-f:.3f}:d={f:.3f}[a{i}]")
-        parts.append(f"[v{i}][a{i}]")
-    fc.append(f"{''.join(parts)}concat=n={len(keep)}:v=1:a=1[v][a]")
-    script = os.path.join(workdir, "body_filter.txt")
-    open(script, "w").write(";\n".join(fc))
-    run(["ffmpeg", "-y", "-ss", f"{pre:.3f}", "-t", f"{end - pre + 1:.3f}", "-i", video,
-         "-filter_complex_script", script, "-map", "[v]", "-map", "[a]", "-ac", "2",
-         *enc_args(cfg), "-c:a", "pcm_s16le", path])
+def _atrim(label, a_f, b_f, fps, i):
+    a, b = float(a_f / fps), float(b_f / fps)
+    f = min(0.02, (b - a) / 4)
+    return (f"[{label}]atrim=start={a:.6f}:end={b:.6f},asetpts=PTS-STARTPTS,"
+            f"afade=t=in:d={f:.4f},afade=t=out:st={b - a - f:.4f}:d={f:.4f}[a{i}]")
 
 
-def ts(t):
-    h, r = divmod(t, 3600); m, s = divmod(r, 60)
-    return f"{int(h):02d}:{int(m):02d}:{s:06.3f}".replace(".", ",")
+def outputs(out_dir, name):
+    return {k: os.path.join(out_dir, f"{name}{ext}") for k, ext in
+            (("video", ".mp4"), ("srt", ".srt"), ("xml", ".xml"), ("timeline", ".timeline.json"), ("cuts", ".cuts.json"))}
 
 
-def tc(t, fps):
-    f = int(round(t * fps)); fr = int(round(fps))
-    return f"{f // (3600*fr):02d}:{f // (60*fr) % 60:02d}:{f // fr % 60:02d}:{f % fr:02d}"
+def render(video, transcript, item, out_dir, cfg=None, quiet=None, timeline_only=False):
+    """item: {name, start, end, cold_open[[a,b]], protect[[a,b]]}. Returns the outputs dict."""
+    cfg = cfg or {}
+    src = media.probe(video)
+    W, H, fps = src["width"], src["height"], src["fps"]
+    name = item["name"]
+    out = outputs(out_dir, name)
+    os.makedirs(out_dir, exist_ok=True)
 
+    rep = safe_cuts(transcript, item["start"], item["end"], "long", item.get("protect", []), quiet)
+    sting = cfg.get("sting") if cfg.get("sting") and os.path.isfile(cfg["sting"]) else None
+    outro = cfg.get("outro") if cfg.get("outro") and os.path.isfile(cfg["outro"]) else None
+    tl = Timeline.for_longform(fps, item["cold_open"], rep.keep,
+                               media.probe(sting)["duration"] if sting else CARD_SECONDS["sting"],
+                               media.probe(outro)["duration"] if outro else CARD_SECONDS["outro"],
+                               "sting" if sting else "card:sting", "outro" if outro else "card:outro")
 
-def write_srt(path, transcript, pieces):
-    """pieces: [(out_offset, [(src_a, src_b)], ...)] -> caption lines on the final timeline."""
-    words = [w for s in transcript["segments"] for w in s["words"]]
-    lines, n = [], 0
-    for off, keep in pieces:
-        lo, hi = keep[0][0], keep[-1][1]
-        chunk = []
-        for w in words:
-            if w["s"] < lo or w["s"] > hi:
-                continue
-            t = remap(w["s"], keep)
-            if t is None:
-                continue
-            chunk.append((off + t, off + (remap(min(w["e"], hi), keep) or t + 0.3), w["w"]))
-        line = []
-        for i, (a, b, w) in enumerate(chunk):
-            line.append((a, b, w))
-            brk = w.endswith((".", "?", "!")) or len(" ".join(x[2] for x in line)) > 38 or \
-                  (i + 1 < len(chunk) and chunk[i + 1][0] - b > 0.8)
-            if brk or i == len(chunk) - 1:
-                n += 1
-                lines.append(f"{n}\n{ts(line[0][0])} --> {ts(max(line[-1][1], line[0][0] + 0.6))}\n"
-                             f"{' '.join(x[2] for x in line)}\n")
-                line = []
-    open(path, "w").write("\n".join(lines))
+    work = tempfile.mkdtemp(prefix="render-", dir=out_dir)
+    try:
+        if not timeline_only:
+            pieces, groups = [], []
+            for seg in tl.segments:          # group consecutive segments of the same kind
+                if groups and groups[-1][0] == seg["kind"]:
+                    groups[-1][1].append(seg)
+                else:
+                    groups.append((seg["kind"], [seg]))
+            for i, (kind, segs) in enumerate(groups):
+                p = os.path.join(work, f"{i:02d}-{kind}.mkv")
+                frames = sum(s["out_f"] - s["in_f"] for s in segs)
+                if segs[0]["src"] == "main":
+                    source_piece(p, video, segs, W, H, fps, cfg, work)
+                elif segs[0]["src"] == "sting":
+                    file_piece(p, sting, frames, W, H, fps, cfg)
+                elif segs[0]["src"] == "outro":
+                    file_piece(p, outro, frames, W, H, fps, cfg)
+                else:
+                    label = "ELIJAH JOHNSON APOLOGETICS" if kind == "sting" else "PATREON OUTRO"
+                    card(p, label, "placeholder - set your file in Settings", frames, W, H, fps, cfg)
+                pieces.append(p)
+            lst = os.path.join(work, "list.txt")
+            open(lst, "w", encoding="utf-8").write("".join(f"file '{p}'\n" for p in pieces))
+            tmp = media.tmp_name(out["video"])
+            media.run([paths.ffmpeg(), "-y", "-f", "concat", "-safe", "0", "-i", lst, "-c:v", "copy",
+                       "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", tmp])
+            media.commit(tmp, out["video"])
 
-
-def write_edl(path, title, keep, fps, rec_start):
-    out = [f"TITLE: {title}", "FCM: NON-DROP FRAME", ""]
-    rec = rec_start
-    for i, (a, b) in enumerate(keep, 1):
-        d = b - a
-        out.append(f"{i:03d}  AX       AA/V  C        {tc(a, fps)} {tc(b, fps)} {tc(rec, fps)} {tc(rec + d, fps)}")
-        out.append("* FROM CLIP NAME: SOURCE")
-        rec += d
-    open(path, "w").write("\n".join(out) + "\n")
-
-
-def media_len(path):
-    return float(subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                                          "-of", "csv=p=0", path]))
-
-
-def write_timeline(a, cfg, plan, rep, name):
-    """Editable timeline for DaVinci Resolve / Premiere Pro, cut against the original recording."""
-    segs = [{"src": "main", "in": x, "out": y, "label": f"Cold open {i + 1}"} for i, (x, y) in enumerate(plan["cold_open"])]
-    extra = {}
-    if cfg.get("sting"):
-        extra["sting"] = cfg["sting"]
-        segs.append({"src": "sting", "in": 0, "out": media_len(cfg["sting"]), "label": "Sting"})
-    segs += [{"src": "main", "in": x, "out": y, "label": name} for x, y in rep.keep]
-    if cfg.get("outro"):
-        extra["outro"] = cfg["outro"]
-        segs.append({"src": "outro", "in": 0, "out": media_len(cfg["outro"]), "label": "Patreon outro"})
-    cold = sum(y - x for x, y in plan["cold_open"])
-    body0 = cold + (media_len(cfg["sting"]) if cfg.get("sting") else 0)
-    marks = [(0, "Cold open"), (body0, "Conversation starts")]
-    for x, y, why in rep.removed:
-        t = remap(x - 0.001, rep.keep)
-        if t is not None:
-            marks.append((body0 + t, f"Trimmed {y - x:.1f}s ({why}) - drag edge to restore"))
-    export_timeline.build(os.path.join(a.out, f"{name}.xml"), name, a.video, segs, extra, marks)
+        media.commit(write_srt(out["srt"], tl, transcript), out["srt"])
+        files = {"main": video, "sting": sting, "outro": outro}
+        media.commit(export_timeline.build(out["xml"], name, tl, {k: v for k, v in files.items() if v}), out["xml"])
+        tl.save(out["timeline"])
+        media.write_json(out["cuts"], {
+            "source_minutes": round(rep.source_len / 60, 2), "output_minutes": round(tl.seconds / 60, 2),
+            "removed": [{"from": x, "to": y, "seconds": round(y - x, 2), "reason": r} for x, y, r in rep.removed]})
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    return out
 
 
 def main():
@@ -178,56 +190,12 @@ def main():
     ap.add_argument("--plan", required=True, help="JSON: name, start, end, cold_open[[a,b]], protect[[a,b]]")
     ap.add_argument("--out", required=True); ap.add_argument("--config", default="{}")
     ap.add_argument("--quiet", help="quiet.json from cuts.detect_quiet (protects sound effects)")
-    ap.add_argument("--timeline-only", action="store_true", help="write the Resolve/Premiere timeline, skip rendering")
+    ap.add_argument("--timeline-only", action="store_true")
     a = ap.parse_args()
-    cfg = json.loads(a.config)
-    plan = json.load(open(a.plan))
-    tr = json.load(open(a.transcript))
-    W, H, fps = probe(a.video)
-    fps = round(fps)
-    os.makedirs(a.out, exist_ok=True)
-    work = tempfile.mkdtemp(dir=a.out)
-    name = plan["name"]
-
     quiet = json.load(open(a.quiet)) if a.quiet else None
-    rep = safe_cuts(tr, plan["start"], plan["end"], "long", plan.get("protect", []), quiet)
-    print(f"body {rep.source_len/60:.1f} min -> {rep.output_len/60:.1f} min, {len(rep.removed)} cuts")
-
-    write_timeline(a, cfg, plan, rep, name)
-    if a.timeline_only:
-        return
-
-    p_cold, p_sting = os.path.join(work, "1.mkv"), os.path.join(work, "2.mkv")
-    p_body, p_outro = os.path.join(work, "3.mkv"), os.path.join(work, "4.mkv")
-    clips_piece(p_cold, a.video, plan["cold_open"], W, H, fps, cfg)
-    if cfg.get("sting"):
-        file_piece(p_sting, cfg["sting"], W, H, fps, cfg)
-    else:
-        card(p_sting, "ELIJAH JOHNSON APOLOGETICS", "placeholder sting - swap in your file", 3, W, H, fps, cfg, riser=True)
-    body_piece(p_body, a.video, plan["start"], plan["end"], rep.keep, W, H, fps, cfg, work)
-    if cfg.get("outro"):
-        file_piece(p_outro, cfg["outro"], W, H, fps, cfg)
-    else:
-        card(p_outro, "PATREON OUTRO", "placeholder - your outro file plays here", 4, W, H, fps, cfg)
-
-    lst = os.path.join(work, "list.txt")
-    open(lst, "w").write("".join(f"file '{p}'\n" for p in (p_cold, p_sting, p_body, p_outro)))
-    final = os.path.join(a.out, f"{name}.mp4")
-    run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", lst, "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-         "-movflags", "+faststart", final])
-
-    cold_len = sum(b - x for x, b in plan["cold_open"])
-    sting_len = media_len(cfg["sting"]) if cfg.get("sting") else 3.0
-    write_srt(os.path.join(a.out, f"{name}.srt"), tr,
-              [(sum(b - x for x, b in plan["cold_open"][:i]), [tuple(c)]) for i, c in enumerate(plan["cold_open"])] +
-              [(cold_len + sting_len, rep.keep)])
-    write_edl(os.path.join(a.out, f"{name}.edl"), name, rep.keep, fps, 3600.0)
-    json.dump({"source_minutes": round(rep.source_len / 60, 2), "output_minutes": round(rep.output_len / 60, 2),
-               "removed": [{"from": x, "to": y, "seconds": round(y - x, 2), "reason": r} for x, y, r in rep.removed]},
-              open(os.path.join(a.out, f"{name}.cuts.json"), "w"), indent=1)
-    for p in (p_cold, p_sting, p_body, p_outro, lst):
-        os.remove(p)
-    print("wrote", final)
+    out = render(a.video, json.load(open(a.transcript)), json.load(open(a.plan)), a.out, json.loads(a.config),
+                 quiet, a.timeline_only)
+    print(json.dumps(out))
 
 
 if __name__ == "__main__":

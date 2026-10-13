@@ -39,19 +39,35 @@ def condensed(transcript):
     return "\n".join(out)
 
 
+def _ask(client, model, messages):
+    msg = client.messages.create(model=model, max_tokens=16000, system=RECIPE, messages=messages)
+    return "".join(b.text for b in msg.content if b.type == "text")
+
+
 def plan(transcript, model="claude-sonnet-5-5"):
+    """Ask Claude for a plan, check it, and ask once more with the problems if it can't be used."""
     import anthropic
+    from plan_check import PlanError, validate
     client = anthropic.Anthropic()
-    msg = client.messages.create(
-        model=model, max_tokens=16000,
-        system=RECIPE,
-        messages=[{"role": "user", "content": condensed(transcript)}])
-    text = "".join(b.text for b in msg.content if b.type == "text")
-    return json.loads(text[text.index("{"): text.rindex("}") + 1])
+    messages = [{"role": "user", "content": condensed(transcript)}]
+    text = _ask(client, model, messages)
+    for attempt in (1, 2):
+        try:
+            raw = json.loads(text[text.index("{"): text.rindex("}") + 1])
+            clean, problems = validate(raw, transcript["duration"])
+            return clean, problems
+        except (ValueError, PlanError) as e:
+            if attempt == 2:
+                raise PlanError(f"Claude's plan couldn't be used twice in a row ({e}). Press Retry to ask again.")
+            messages += [{"role": "assistant", "content": text},
+                         {"role": "user", "content": f"That plan can't be used: {e} Return the corrected JSON only."}]
+            text = _ask(client, model, messages)
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("transcript"); ap.add_argument("out")
     a = ap.parse_args()
-    json.dump(plan(json.load(open(a.transcript))), open(a.out, "w"), indent=1)
+    clean, problems = plan(json.load(open(a.transcript)))
+    json.dump(clean, open(a.out, "w"), indent=1)
+    print("\n".join(problems))

@@ -4,67 +4,112 @@ Turns a recorded live into review-ready drafts: one long-form video per guest
 conversation, vertical shorts, captions, titles, descriptions, chapters,
 thumbnails, and a timeline your editor opens in DaVinci Resolve or Premiere Pro.
 
-## Run the app
+## Setup (Mac or Windows, one time)
+
+1. Install Python 3.11+ and FFmpeg.
+   Mac: `brew install ffmpeg python`. Windows: `winget install ffmpeg Python.Python.3.12`.
+2. `pip install -r requirements.txt`
+3. `python scripts/get_models.py` downloads the models (~830 MB) and any missing fonts, then
+   prints a setup check. Every line should say `ok` except the Claude API key, which you add in the app.
+4. `python app/server.py` opens http://localhost:8765. Add your Claude API key in Settings, plus
+   the sting, the Patreon outro and your thumbnail photo folder.
+
+The app repeats the setup check every time it starts, and the home screen shows anything missing
+with the exact fix.
+
+### Where things live
+
+| Setting | Default | Change it with |
+| --- | --- | --- |
+| Models | `models/` in this folder | `CLIPSTUDIO_MODELS=/path/to/models` |
+| Projects (recordings, drafts) | `projects/` in this folder | `CLIPSTUDIO_PROJECTS=/path/to/projects` |
+| FFmpeg | whatever is on PATH | `CLIPSTUDIO_FFMPEG` / `CLIPSTUDIO_FFPROBE` |
+| Video encoder | Mac: built-in hardware encoder; elsewhere libx264 | `"encoder": "amf"` (AMD GPU) or `"libx264"` in `projects/settings.json` |
+
+## How a live goes through it
+
+**Analyze → Review → Render selected → Approve and export**
+
+1. **Analyze** (about 10 minutes per hour of video). Add a recording (drop it in, point to where it
+   already sits so nothing is copied, or paste a YouTube link). Clip Studio transcribes it, finds the
+   quiet stretches, and asks Claude for a plan: each guest conversation with its cold open, plus shorts.
+   The plan is checked before you see it: times must be inside the recording, each conversation needs
+   a cold open, each short needs pieces of a sensible length. Anything wrong is listed with what to fix.
+2. **Review**. Nothing has been rendered yet. For every conversation you can change the guest name,
+   topic, start and end, and the cold-open clips, and press **Hear it** to play any stretch with
+   10 seconds of context around it. For shorts: hear each piece, and pick the framing:
+   *Auto* (follows the face, switches to the screen when Scripture is shared), *Host only*,
+   *Full frame* (for Scripture and screen shares), or *Split screen*. Under **Names and terms**, fix what
+   the transcriber gets wrong (`McKills a day => Melchizedek`); corrections go into captions, titles
+   and descriptions without disturbing timing.
+3. **Render selected**. Tick what you want and press Render. One render runs at a time; other
+   lives wait in line with their place shown. Stop works mid-render.
+4. **Approve and export**. Each rendered conversation shows its video, chapters, every trimmed pause
+   (Hear it / Restore), titles, thumbnails and description. Restoring a pause or editing a time marks
+   just that clip "changed since render"; re-rendering redoes only that clip.
+   Exports: **Resolve / Premiere** (`.xml`; Resolve: File > Import > Timeline, Premiere: File > Import),
+   the video, and `.srt` captions (CapCut: import the video, then the captions).
+
+## Your edits are kept separate
+
+Everything you change in Review is saved in `edits.json` in the project, apart from Claude's output.
+Re-planning or regenerating titles never overwrites your titles, times, selections or approvals; the
+app shows Claude's new suggestions next to yours.
+
+## Project folder
 
 ```
-python app/server.py
+projects/<live>/
+  project.json      name, source, job status
+  edits.json        your changes (never overwritten by the AI)
+  source/           uploaded recording (each upload gets its own project, so same names never clash)
+  work/             audio, transcript, quiet stretches, plan, step records, preview clips
+  drafts/<id>.*     .mp4, .srt, .xml, .timeline.json, .cuts.json, titles, thumbnails
 ```
 
-Opens http://localhost:8765. Add a recording (drop it in, paste where it already sits so
-nothing is copied, or paste a YouTube link to one of your own videos), then review: the live map shows every conversation found; each cut
-conversation has its video, three titles, three thumbnails, description and chapters.
-"Open in DaVinci Resolve or Premiere" downloads an `.xml` timeline:
-Resolve: File > Import > Timeline. Premiere: File > Import. CapCut: download the video and
-import the `.srt` captions.
+## Reliability
+
+- **Retries are safe.** Every file is written as `name.partial.ext`, checked (plays, has audio and
+  video, parses), then moved into place. A step only counts as done when all its files pass that
+  check, including captions and editor exports, and when its inputs haven't changed since.
+  A crash mid-render leaves nothing that looks finished; Retry redoes it.
+- **One timeline for everything.** The video, captions, chapters and the Resolve/Premiere timeline
+  are all built from the same frame-exact plan (`drafts/<id>.timeline.json`), using the recording's
+  real frame rate (29.97 stays 30000/1001) and the real length of your sting and outro.
+- **Restart-proof.** If the app closes mid-job, it picks the job back up on the next start.
+
+## Command line
+
+```
+python clipstudio.py analyze projects/<live>
+python clipstudio.py render  projects/<live> [ids...]
+python -m pytest -q tests          # regression tests, ~10 seconds, no models needed
+```
 
 ## What's here
 
 | File | Does |
 | --- | --- |
-| `clipstudio.py` | One command: `python clipstudio.py process <recording>` runs every step and resumes if interrupted |
-| `engine/transcribe.py` | Local speech-to-text with word timestamps (Parakeet TDT 0.6B via sherpa-onnx). No cloud, ~10x real time on 2 CPU cores |
-| `engine/cuts.py` | Safe cuts. Only cuts where nobody is talking AND the audio is quiet, so sound effects and laughter survive |
-| `engine/moments.py` | The planning step: sends the transcript to Claude with the channel's editing recipe, gets back conversations, cold opens, titles, shorts |
-| `engine/render_long.py` | Cold open -> sting -> conversation with safe cuts -> Patreon outro. Also writes `.srt` captions and a CMX3600 `.edl` |
-| `engine/render_short.py` | 1080x1920 short: face-tracked crop, screen-share layout, animated word-by-word captions, hook text |
-| `engine/export_timeline.py` | Editable timeline (FCP7 XML) for Resolve and Premiere: every cut against the original file, one audio track per OBS track, a marker at every trimmed pause |
-| `engine/metadata.py` | Titles, description, chapters (timed to the final cut), tags, thumbnail briefs |
-| `engine/thumbnail.py` | 1280x720 thumbnails in the channel's style: cutouts, outline glow, Anton headline, arrow / lightning / banner / bubble |
-| `engine/fetch_youtube.py` | Gets a video from a YouTube link (yt-dlp, best video + audio merged to MP4). Keep it current with `pip install -U yt-dlp` |
-| `app/` | The local app: `server.py` (runs the pipeline, serves files) and `static/index.html` (the interface) |
+| `clipstudio.py` | The pipeline: analyze, render, checked steps, edits overlay |
+| `engine/paths.py` | Every file location, environment overrides, the setup check |
+| `engine/media.py` | FFmpeg runner (cancellable), probing, output validation, safe file commits |
+| `engine/timeline.py` | Frame-exact timeline shared by video, captions, chapters and XML |
+| `engine/transcribe.py` | Local speech-to-text with word timestamps (Parakeet TDT 0.6B via sherpa-onnx) |
+| `engine/cuts.py` | Safe cuts: only where nobody is talking and the audio is quiet |
+| `engine/moments.py` + `plan_check.py` | Claude's plan, then validation (one automatic repair attempt) |
+| `engine/glossary.py` | Names and terms corrections that keep word timing |
+| `engine/render_long.py` | Cold open → sting → conversation with safe cuts → Patreon outro |
+| `engine/render_short.py` | 1080x1920 short: framing modes, word-by-word captions, hook text |
+| `engine/export_timeline.py` | FCP7 XML for Resolve and Premiere: cuts against the original file, a marker at every trimmed pause |
+| `engine/metadata.py` | Titles, description, chapters (on the final cut), tags |
+| `engine/thumbnail.py` | 1280x720 thumbnails in the channel's style |
+| `engine/fetch_youtube.py` | Gets your video from a YouTube link (keep current: `pip install -U yt-dlp`) |
+| `app/` | The local app: `server.py` (queue, API) and `static/index.html` (the interface) |
 
-## Setup (Mac or Windows)
+## Known limits
 
-1. Install Python 3.11+ and FFmpeg (Mac: `brew install ffmpeg python`; Windows: `winget install ffmpeg Python.Python.3.12`).
-2. `pip install -r requirements.txt`
-3. Download models: `python scripts/get_models.py` (one time, ~830 MB). It fetches:
-   - `sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8` and `silero_vad.onnx` from the sherpa-onnx `asr-models` GitHub release
-   - `yunet.onnx` (face detection) from the opencv_zoo repo
-   - `u2net_human_seg.onnx` (thumbnail cutouts) from the rembg GitHub release
-   Fonts (Anton, Archivo, Poppins) are in `assets/fonts`.
-4. Start the app and add your Claude API key in Settings (also: sting, Patreon outro, thumbnail photo folder).
-
-## Config for real recordings
-
-Pass `--config` to `render_long.py` as JSON:
-
-```json
-{"sting": "assets/sting.mp4", "outro": "assets/patreon_outro.mp4",
- "encoder": "videotoolbox"}
-```
-
-`encoder`: `videotoolbox` on the MacBooks, `amf` on the Ryzen mini PC (if its GPU supports it), default `libx264` everywhere.
-
-## Large files
-
-Nothing loads the video into memory. Audio is extracted once (~110 MB per hour);
-every render decodes only the stretch it needs from a seek point. A 5 GB, 3-hour
-OBS recording needs about 1 GB of free disk for working files.
-
-## Known limits (Phase 1)
-
-- Speaker labels come from separate OBS audio tracks (Phase 2). On a single mixed track, captions don't say who's talking.
-- Sting and outro are placeholder cards until their files are set in Settings.
-- Thumbnails: guest images (AI-generated stand-ins for audio-only callers) need an image-generation service; until then thumbnails use the solo, banner and bubble layouts.
-- No one-click installer yet: Phase 4 packages this as a Mac app and a Windows installer.
-- Caption spelling follows the transcription; the custom name list (Melchizedek, Tacitus...) is Phase 2.
+- **Guest-only framing** isn't offered: most guests call in audio-only, so there's no guest face to
+  frame. Video guests appear in *Full frame* and *Split screen*.
+- Speaker labels per OBS audio track aren't used yet; on one mixed track captions don't say who's talking.
+- The sting and outro are marked as gaps in the editor timeline until their files are set in Settings.
+- No one-click installer yet.

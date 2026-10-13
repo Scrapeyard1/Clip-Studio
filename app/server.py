@@ -2,30 +2,66 @@
 
     python app/server.py            -> opens http://localhost:8765
 
-Everything runs on this computer. Recordings are never uploaded anywhere;
-only the transcript text goes to Claude for planning and titles.
+Everything runs on this computer. Recordings are never uploaded anywhere; only transcript
+text goes to Claude for planning and titles.
+
+Flow per project:  add recording -> Analyze (queued) -> Review proposals -> Render selected
+(queued) -> watch drafts, approve, export. One heavy job runs at a time; the rest wait in line.
 """
-import json, os, re, shutil, sys, threading, time, traceback, webbrowser
-from fastapi import FastAPI, HTTPException, UploadFile, File, Body
+import collections
+import json
+import os
+import re
+import shutil
+import sys
+import threading
+import time
+import traceback
+import uuid
+import webbrowser
+
+import uvicorn
+from fastapi import Body, FastAPI, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-import uvicorn
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PROJECTS = os.environ.get("CLIPSTUDIO_PROJECTS", os.path.join(ROOT, "projects"))
-VIDEO_EXT = {".mp4", ".mov", ".mkv", ".m4v", ".webm", ".flv"}
-os.makedirs(PROJECTS, exist_ok=True)
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "engine"))
 
+import clipstudio as pipeline  # noqa: E402
+import media  # noqa: E402
+import paths  # noqa: E402
+
+PROJECTS = paths.PROJECTS
+VIDEO_EXT = {".mp4", ".mov", ".mkv", ".m4v", ".webm", ".flv"}
+os.makedirs(PROJECTS, exist_ok=True)
 SETTINGS = os.path.join(PROJECTS, "settings.json")
 SETTING_KEYS = {"anthropic_api_key", "sting", "outro", "host_photos", "recordings_folder"}
+EDITABLE = {
+    "long": {"guest", "topic", "start", "end", "cold_open", "protect", "selected",
+             "titles", "chosen_title", "description", "chosen_thumbnail", "approved"},
+    "short": {"hook", "category", "pieces", "framing", "protect", "selected", "approved"},
+}
 
-app = FastAPI(title="Clip Studio")
+from contextlib import asynccontextmanager
 
 
+@asynccontextmanager
+async def lifespan(_app):
+    start_worker()
+    for c in [c for c in health()["checks"] if not c["ok"]]:
+        print(f"[setup] {c['item']}: missing. {c['fix']}")
+    yield
+
+
+app = FastAPI(title="Clip Studio", lifespan=lifespan)
+_lock = threading.RLock()
+
+
+# ---------------- settings ----------------
 def settings():
-    s = json.load(open(SETTINGS)) if os.path.exists(SETTINGS) else {}
+    s = json.load(open(SETTINGS, encoding="utf-8")) if os.path.exists(SETTINGS) else {}
     if s.get("anthropic_api_key"):
         os.environ["ANTHROPIC_API_KEY"] = s["anthropic_api_key"]
     return s
@@ -43,238 +79,446 @@ def put_settings(body: dict = Body(...)):
     s = settings()
     for k, v in body.items():
         if k in SETTING_KEYS and not (k == "anthropic_api_key" and (not v or v.startswith("saved"))):
-            v = v.strip().strip('"')
-            if k in ("sting", "outro") and v and not os.path.isfile(v):
-                raise HTTPException(400, f"The {k} file wasn't found at that location.")
+            v = str(v).strip().strip('"')
+            if k in ("sting", "outro") and v and not media.valid_media(v):
+                raise HTTPException(400, f"The {k} file wasn't found there, or it isn't a playable video.")
             if k in ("host_photos", "recordings_folder") and v and not os.path.isdir(v):
                 raise HTTPException(400, "That folder wasn't found.")
             s[k] = v
-    json.dump(s, open(SETTINGS, "w"), indent=1)
+    media.write_json(SETTINGS, s)
     settings()
     return get_settings()
-_lock = threading.Lock()
 
 
+@app.get("/api/health")
+def health():
+    """What's missing for the app to work: FFmpeg, models, fonts, API key."""
+    checks = paths.check(settings().get("anthropic_api_key"))
+    return {"ok": all(c["ok"] for c in checks), "checks": checks}
+
+
+# ---------------- project files ----------------
 def pdir(pid):
     d = os.path.join(PROJECTS, os.path.basename(pid))
-    if not os.path.isdir(d):
+    if not os.path.isfile(os.path.join(d, "project.json")):
         raise HTTPException(404, "No project with that name")
     return d
 
 
 def load(pid):
-    return json.load(open(os.path.join(pdir(pid), "project.json")))
+    return json.load(open(os.path.join(pdir(pid), "project.json"), encoding="utf-8"))
 
 
 def save(pid, proj):
     with _lock:
-        tmp = os.path.join(pdir(pid), "project.json.tmp")
-        json.dump(proj, open(tmp, "w"), indent=1)
-        os.replace(tmp, os.path.join(pdir(pid), "project.json"))
+        media.write_json(os.path.join(pdir(pid), "project.json"), proj)
 
 
-@app.get("/api/projects")
-def projects():
-    out = []
-    for d in sorted(os.listdir(PROJECTS), reverse=True):
-        f = os.path.join(PROJECTS, d, "project.json")
-        if os.path.exists(f):
-            p = json.load(open(f))
-            out.append({"id": p["id"], "title": p["title"], "date": p.get("date"), "step": p["status"]["step"],
-                        "rendered": sum(c.get("rendered", False) for c in p["conversations"]),
-                        "conversations": len(p["conversations"]), "shorts": len(p.get("shorts", []))})
-    return out
+def set_status(pid, **kw):
+    with _lock:
+        p = load(pid)
+        p["status"].update(kw)
+        save(pid, p)
 
 
-@app.get("/api/projects/{pid}")
-def project(pid: str):
-    return load(pid)
+def load_edits(pid):
+    return pipeline.edits(pdir(pid))
 
 
-@app.patch("/api/projects/{pid}/items/{name}")
-def edit_item(pid: str, name: str, changes: dict = Body(...)):
-    """Save edits from the review screen: chosen title, edited titles, description, thumbnail, approval."""
-    allowed = {"titles", "chosen_title", "description", "chosen_thumbnail", "approved", "hook", "tags", "pinned_comment"}
-    proj = load(pid)
-    for item in proj["conversations"] + proj.get("shorts", []):
-        if item["name"] == name:
-            item.update({k: v for k, v in changes.items() if k in allowed})
-            save(pid, proj)
-            return item
-    raise HTTPException(404, "No video with that name in this project")
+def save_edits(pid, e):
+    with _lock:
+        media.write_json(os.path.join(pdir(pid), "edits.json"), e)
 
 
 def slug(s):
     return re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")[:48] or "live"
 
 
-def new_project(src_path, title, link=None):
-    base = time.strftime("%Y-%m-%d-") + slug(title)
-    pid, n = base, 2
-    while os.path.exists(os.path.join(PROJECTS, pid)):
-        pid, n = f"{base}-{n}", n + 1
-    d = os.path.join(PROJECTS, pid)
-    os.makedirs(d, exist_ok=True)
-    proj = {"id": pid, "title": title, "date": time.strftime("%Y-%m-%d"), "source": src_path, "link": link,
-            "status": {"step": "queued", "steps": [], "error": None}, "conversations": [], "shorts": []}
-    json.dump(proj, open(os.path.join(d, "project.json"), "w"), indent=1)
-    threading.Thread(target=fetch_then_run if link else run_pipeline, args=(pid,), daemon=True).start()
-    return proj
+def view(pid):
+    """The project as the interface sees it: AI plan + the person's edits + what's been rendered."""
+    d = pdir(pid)
+    p = load(pid)
+    e = load_edits(pid)
+    cfg = render_cfg()
+    plan = pipeline.load(os.path.join(d, "work"), "plan.json") or {}
+    convs, shorts = pipeline.effective_items(d) if plan else ([], [])
+    items = []
+    for it in convs + shorts:
+        mine = e["items"].get(it["id"], {})
+        outs = pipeline.outputs_for(d, it)
+        key = f"render-{it['id']}"
+        state = pipeline.step_state(d, key, list(outs.values()) if it["kind"] == "long" else [outs["video"]],
+                                    pipeline.render_inputs(d, it, cfg))
+        v = {**it, "selected": mine.get("selected", it["kind"] == "long" and it.get("rank") != "WEAK"),
+             "approved": mine.get("approved", False), "render": state,
+             "problems": pipeline.render_problems(it)}
+        rel = lambda f: os.path.relpath(f, d).replace("\\", "/")
+        if os.path.exists(outs["video"]):
+            v["files"] = {k: rel(f) for k, f in outs.items() if os.path.exists(f)}
+        if it["kind"] == "long":
+            cuts = pipeline.load(os.path.join(d, "drafts"), it["id"] + ".cuts.json")
+            if cuts:
+                v.update(minutes_in=cuts["source_minutes"], minutes_out=cuts["output_minutes"], cuts=cuts["removed"])
+            meta = pipeline.load(os.path.join(d, "drafts"), it["id"] + ".metadata.json") or {}
+            ai_titles = meta.get("titles") or it.get("titles") or []
+            v["titles"] = mine.get("titles", ai_titles)       # the person's wording wins
+            v["ai_titles"] = ai_titles
+            v["chosen_title"] = mine.get("chosen_title", 0)
+            v["description"] = mine.get("description", meta.get("description", ""))
+            v["chapters"] = meta.get("chapters", [])
+            v["tags"] = meta.get("tags", [])
+            v["chosen_thumbnail"] = mine.get("chosen_thumbnail", 0)
+            v["thumbnails"] = [rel(f) for f in (os.path.join(d, "drafts", f"{it['id']}.thumb{k}.jpg") for k in (1, 2, 3))
+                               if os.path.exists(f)]
+        items.append(v)
+    tr = pipeline.load(os.path.join(d, "work"), "transcript.json")
+    return {**p, "duration": tr["duration"] if tr else p.get("duration"),
+            "items": items, "problems": plan.get("problems", []),
+            "glossary": pipeline.glossary_text(d), "queue_position": queue.position(pid)}
 
 
-@app.post("/api/projects/from-link")
-def add_from_link(body: dict = Body(...)):
-    """A YouTube link (your own video or live replay): downloaded on this computer, then processed."""
-    url = body.get("url", "").strip()
-    if not re.match(r"^https?://\S+$", url):
-        raise HTTPException(400, "Paste the full link, starting with https://")
-    return new_project(None, "YouTube video", link=url)
+# ---------------- the job queue ----------------
+class Queue:
+    """One heavy job at a time (FFmpeg and transcription already use every core).
+    Jobs live in each project's status, so they survive an app restart."""
+    def __init__(self):
+        self.q = collections.deque()
+        self.cv = threading.Condition()
+        self.current = None              # (pid, cancel_event)
+
+    def position(self, pid):
+        with self.cv:
+            if self.current and self.current[0] == pid:
+                return 0
+            ids = [j[0] for j in self.q]
+            return ids.index(pid) + 1 if pid in ids else None
+
+    def add(self, pid, job, ids=None):
+        with self.cv:
+            if (self.current and self.current[0] == pid) or any(j[0] == pid for j in self.q):
+                raise HTTPException(409, "This live already has a job waiting or running.")
+            set_status(pid, state="queued", queued_at=time.time(), job=job, ids=ids or [], error=None, steps=[], step=None, progress=None)
+            self.q.append((pid, job, ids or []))
+            self.cv.notify()
+
+    def cancel(self, pid):
+        with self.cv:
+            for j in list(self.q):
+                if j[0] == pid:
+                    self.q.remove(j)
+                    set_status(pid, state="cancelled", step=None)
+                    return "removed from the line"
+            if self.current and self.current[0] == pid:
+                self.current[1].set()
+                return "stopping"
+        raise HTTPException(409, "Nothing is running for this live.")
+
+    def worker(self):
+        while True:
+            with self.cv:
+                while not self.q:
+                    self.cv.wait()
+                pid, job, ids = self.q.popleft()
+                ev = threading.Event()
+                self.current = (pid, ev)
+            try:
+                run_job(pid, job, ids, ev)
+            finally:
+                with self.cv:
+                    self.current = None
+
+    def recover(self):
+        """After a restart, put interrupted and waiting jobs back in line (oldest first)."""
+        found = []
+        for name in os.listdir(PROJECTS):
+            f = os.path.join(PROJECTS, name, "project.json")
+            if os.path.isfile(f):
+                p = json.load(open(f, encoding="utf-8"))
+                st = p.get("status", {})
+                if st.get("state") in ("queued", "running"):
+                    found.append((st.get("queued_at", 0), p["id"], st.get("job", "analyze"), st.get("ids", [])))
+        for _, pid, job, ids in sorted(found):
+            with self.cv:
+                set_status(pid, state="queued", note="Picked up again after the app restarted.")
+                self.q.append((pid, job, ids))
+                self.cv.notify()
 
 
-def fetch_then_run(pid):
+queue = Queue()
+
+
+def render_cfg():
+    s = settings()
+    return {k: s[k] for k in ("sting", "outro", "host_photos", "encoder") if s.get(k)}
+
+
+def run_job(pid, job, ids, ev):
+    media.cancel_event.ev = ev
+    media.progress.fn = None          # never report into a previous job's progress bar
+
+    def on_step(name):
+        with _lock:
+            p = load(pid)
+            st = p["status"]
+            st["step"] = name
+            if not st.get("steps") or st["steps"][-1] != name:
+                st.setdefault("steps", []).append(name)
+            save(pid, p)
+
+    rep = pipeline.Reporter(on_step=on_step, on_progress=lambda pct: set_status(pid, progress=pct), cancel_event=ev)
+    set_status(pid, state="running", started_at=time.time())
+    try:
+        settings()
+        p = load(pid)
+        d = pdir(pid)
+        if job == "fetch":
+            fetch(pid, rep)
+            p = load(pid)
+            job = "analyze"
+        if job == "analyze":
+            if not media.valid_media(p["source"], need_video=True, need_audio=True):
+                raise RuntimeError("The recording can't be read. Check the file plays, then Retry.")
+            pipeline.analyze(d, p["source"], rep)
+            set_status(pid, state="review", step=None, progress=None)
+        elif job == "render":
+            pipeline.render(d, p["source"], ids, render_cfg(), rep)
+            set_status(pid, state="review", step=None, progress=None, rendered_at=time.time())
+    except media.Cancelled:
+        set_status(pid, state="cancelled", step=None, note="Stopped. Finished steps are kept; Retry continues.")
+    except Exception as e:
+        msg = str(e)
+        if "ANTHROPIC_API_KEY" in msg or "api_key" in msg.lower() or "authentication" in msg.lower():
+            msg = "Finding conversations needs your Claude API key. Add it in Settings, then press Retry."
+        set_status(pid, state="error", error=msg[:1200], trace=traceback.format_exc()[-3000:])
+    finally:
+        media.cancel_event.ev = None
+
+
+def fetch(pid, rep):
     import fetch_youtube as yt
     p = load(pid)
-    p["status"].update(step="Getting the video from YouTube", steps=["Getting the video from YouTube"], progress=0)
-    save(pid, p)
-    try:
-        meta = yt.info(p["link"])
+    rep.step("Get the video from YouTube")
+    meta = yt.info(p["link"])
+    with _lock:
         p = load(pid)
         p["title"] = meta["title"]
         if meta.get("date"):
             p["date"] = f"{meta['date'][:4]}-{meta['date'][4:6]}-{meta['date'][6:]}"
         save(pid, p)
-
-        def prog(pct):
-            q = load(pid); q["status"]["progress"] = pct; save(pid, q)
-        path = yt.download(p["link"], os.path.join(PROJECTS, "_recordings"), prog)
+    path = yt.download(p["link"], os.path.join(pdir(pid), "source"), rep.progress)
+    with _lock:
         p = load(pid)
         p["source"] = path
-        p["status"].pop("progress", None)
         save(pid, p)
-    except Exception as e:
-        p = load(pid)
-        p["status"].update(step="error", error=str(e) if isinstance(e, yt.FetchError) else f"Download failed: {e}")
-        save(pid, p)
-        return
-    run_pipeline(pid)
+
+
+# ---------------- adding recordings ----------------
+def new_project(title, source=None, link=None):
+    base = time.strftime("%Y-%m-%d-") + slug(title)
+    pid, n = base, 2
+    while os.path.exists(os.path.join(PROJECTS, pid)):
+        pid, n = f"{base}-{n}", n + 1
+    d = os.path.join(PROJECTS, pid)
+    os.makedirs(os.path.join(d, "source"))
+    media.write_json(os.path.join(d, "project.json"), {
+        "id": pid, "title": title, "date": time.strftime("%Y-%m-%d"), "source": source, "link": link,
+        "status": {"state": "new", "queued_at": time.time()}})
+    return pid
 
 
 @app.post("/api/projects/from-path")
 def add_from_path(body: dict = Body(...)):
-    """Use a recording where it already sits (OBS folder): nothing is copied, so 5 GB files cost nothing."""
-    path = body.get("path", "").strip().strip('"')
+    """Use a recording where it already sits (OBS folder): nothing is copied."""
+    path = os.path.abspath(str(body.get("path", "")).strip().strip('"'))
     if not os.path.isfile(path):
         raise HTTPException(400, "That file wasn't found. Check the path and try again.")
     if os.path.splitext(path)[1].lower() not in VIDEO_EXT:
         raise HTTPException(400, "Use a video file: MP4, MOV or MKV.")
-    return new_project(path, body.get("title") or os.path.splitext(os.path.basename(path))[0])
+    pid = new_project(body.get("title") or os.path.splitext(os.path.basename(path))[0], source=path)
+    queue.add(pid, "analyze")
+    return load(pid)
 
 
 @app.post("/api/projects/upload")
 async def add_upload(file: UploadFile = File(...)):
-    """Drag and drop: the file is streamed to disk in 8 MB pieces, never held in memory."""
-    if os.path.splitext(file.filename)[1].lower() not in VIDEO_EXT:
+    """Drag and drop: streamed to disk in 8 MB pieces into this project's own folder,
+    so two recordings with the same file name never overwrite each other."""
+    name = os.path.basename(file.filename or "recording.mp4")
+    if os.path.splitext(name)[1].lower() not in VIDEO_EXT:
         raise HTTPException(400, "Use a video file: MP4, MOV or MKV.")
-    inbox = os.path.join(PROJECTS, "_recordings")
-    os.makedirs(inbox, exist_ok=True)
-    dest = os.path.join(inbox, os.path.basename(file.filename))
-    with open(dest, "wb") as f:
+    pid = new_project(os.path.splitext(name)[0])
+    dest = os.path.join(pdir(pid), "source", name)
+    tmp = dest + ".partial"
+    with open(tmp, "wb") as f:
         while chunk := await file.read(8 * 1024 * 1024):
             f.write(chunk)
-    return new_project(dest, os.path.splitext(file.filename)[0])
+    os.replace(tmp, dest)
+    with _lock:
+        p = load(pid); p["source"] = dest; save(pid, p)
+    queue.add(pid, "analyze")
+    return load(pid)
+
+
+@app.post("/api/projects/from-link")
+def add_from_link(body: dict = Body(...)):
+    url = str(body.get("url", "")).strip()
+    if not re.match(r"^https?://\S+$", url):
+        raise HTTPException(400, "Paste the full link, starting with https://")
+    pid = new_project("YouTube video", link=url)
+    queue.add(pid, "fetch")
+    return load(pid)
+
+
+# ---------------- projects ----------------
+@app.get("/api/projects")
+def projects():
+    out = []
+    for name in sorted(os.listdir(PROJECTS), reverse=True):
+        f = os.path.join(PROJECTS, name, "project.json")
+        if os.path.isfile(f):
+            p = json.load(open(f, encoding="utf-8"))
+            out.append({"id": p["id"], "title": p["title"], "date": p.get("date"), "state": p["status"].get("state"),
+                        "step": p["status"].get("step")})
+    return out
+
+
+@app.get("/api/projects/{pid}")
+def project(pid: str):
+    return view(pid)
+
+
+@app.patch("/api/projects/{pid}/items/{iid}")
+def edit_item(pid: str, iid: str, changes: dict = Body(...)):
+    """Save a person's change. Stored in edits.json, never in the AI's files, so regenerating
+    plans, titles or renders can't overwrite it."""
+    d = pdir(pid)
+    convs, shorts = pipeline.effective_items(d)
+    item = next((i for i in convs + shorts if i["id"] == iid), None)
+    if not item:
+        raise HTTPException(404, "No conversation or short with that id")
+    bad = set(changes) - EDITABLE[item["kind"]]
+    if bad:
+        raise HTTPException(400, f"Can't change: {', '.join(sorted(bad))}")
+    dur = (pipeline.load(os.path.join(d, "work"), "transcript.json") or {}).get("duration", 1e9)
+    for k in ("cold_open", "pieces", "protect"):
+        if k in changes:
+            spans = changes[k]
+            if not isinstance(spans, list) or any(not (isinstance(s, list) and len(s) == 2 and 0 <= s[0] < s[1] <= dur + 1)
+                                                  for s in spans):
+                raise HTTPException(400, "Each clip needs a start before its end, inside the recording.")
+    for k in ("start", "end"):
+        if k in changes and not (isinstance(changes[k], (int, float)) and 0 <= changes[k] <= dur + 1):
+            raise HTTPException(400, "That time is outside the recording.")
+    with _lock:
+        e = load_edits(pid)
+        e["items"].setdefault(iid, {}).update(changes)
+        save_edits(pid, e)
+    return next(i for i in view(pid)["items"] if i["id"] == iid)
+
+
+@app.put("/api/projects/{pid}/glossary")
+def put_glossary(pid: str, body: dict = Body(...)):
+    import glossary
+    text = str(body.get("text", ""))
+    with _lock:
+        e = load_edits(pid)
+        e["glossary"] = text
+        save_edits(pid, e)
+    tr = pipeline.load(os.path.join(pdir(pid), "work"), "transcript.json")
+    counts = glossary.apply(tr, text)[1] if tr else {}
+    return {"text": text, "matches": counts}
+
+
+@app.post("/api/projects/{pid}/render")
+def render(pid: str, body: dict = Body(...)):
+    ids = [str(i) for i in body.get("ids", [])]
+    if not ids:
+        raise HTTPException(400, "Select at least one conversation or short.")
+    v = view(pid)
+    by_id = {i["id"]: i for i in v["items"]}
+    blocked = [f"{by_id[i].get('guest') or by_id[i].get('hook')}: {' '.join(by_id[i]['problems'])}"
+               for i in ids if i in by_id and by_id[i]["problems"]]
+    if blocked:
+        raise HTTPException(400, "Fix these first. " + " | ".join(blocked))
+    queue.add(pid, "render", ids)
+    return {"queued": ids}
+
+
+@app.post("/api/projects/{pid}/cancel")
+def cancel(pid: str):
+    return {"result": queue.cancel(pid)}
 
 
 @app.post("/api/projects/{pid}/retry")
 def retry(pid: str):
-    """Start again from the step that failed; finished steps are skipped."""
     p = load(pid)
-    p["status"].update(step="queued", error=None)
-    save(pid, p)
-    need_download = p.get("link") and not (p.get("source") and os.path.exists(p["source"]))
-    threading.Thread(target=fetch_then_run if need_download else run_pipeline, args=(pid,), daemon=True).start()
-    return p
+    st = p["status"]
+    job = st.get("job") or ("fetch" if p.get("link") and not p.get("source") else "analyze")
+    queue.add(pid, job, st.get("ids"))
+    return load(pid)
 
 
-def run_pipeline(pid):
-    """Runs clipstudio.process and mirrors its progress into project.json for the interface."""
-    import clipstudio
-    settings()          # puts the saved API key in place for the planning step
-    proj = load(pid)
-
-    def step(name):
-        p = load(pid)
-        name = name[0].upper() + name[1:]
-        p["status"]["step"] = name
-        if not p["status"]["steps"] or p["status"]["steps"][-1] != name:
-            p["status"]["steps"].append(name)
-        save(pid, p)
-    try:
-        cfg = {k: v for k, v in settings().items() if k in ("sting", "outro", "host_photos") and v}
-        clipstudio.process(proj["source"], workdir=pdir(pid), on_step=step, config=cfg)
-        p = load(pid)
-        sync_manifest(p)
-        p["status"]["step"] = "done"
-        save(pid, p)
-    except Exception as e:
-        p = load(pid)
-        msg = str(e)
-        if "ANTHROPIC_API_KEY" in msg or "api_key" in msg.lower():
-            msg = "Planning needs your Anthropic API key. Add it in Settings, then press Retry."
-        p["status"].update(step="error", error=msg, trace=traceback.format_exc()[-3000:])
-        save(pid, p)
+@app.post("/api/projects/{pid}/replan")
+def replan(pid: str):
+    """Ask Claude for a fresh plan. The person's edits are kept and re-applied to items whose id survives."""
+    d = pdir(pid)
+    for f in (os.path.join(d, "work", "plan.json"), os.path.join(d, "work", "steps", "plan.json")):
+        if os.path.exists(f):
+            os.remove(f)
+    queue.add(pid, "analyze")
+    return load(pid)
 
 
-def sync_manifest(p):
-    """Fill the project's conversation and short lists from the plan and the rendered drafts."""
-    d = pdir(p["id"])
-    plan = json.load(open(os.path.join(d, "plan.json")))
-    p["duration"] = json.load(open(os.path.join(d, "transcript.json")))["duration"]
-    convs = []
-    for i, c in enumerate(plan["conversations"], 1):
-        name = f"{i:02d}-long-{clipstudio_slug(c['guest'])}"
-        base = os.path.join("drafts", name)
-        item = {"name": name, "guest": c["guest"], "topic": c.get("topic", ""), "start": c["start"], "end": c["end"],
-                "rank": c.get("rank"), "rendered": os.path.exists(os.path.join(d, base + ".mp4")),
-                "video": base + ".mp4", "srt": base + ".srt", "xml": base + ".xml", "edl": base + ".edl",
-                "cold_open": c.get("cold_open", []), "chosen_title": 0, "chosen_thumbnail": 0,
-                "thumbnails": [f"{base}.thumb{i}.jpg" for i in (1, 2, 3) if os.path.exists(os.path.join(d, f"{base}.thumb{i}.jpg"))]}
-        cj = os.path.join(d, base + ".cuts.json")
-        if os.path.exists(cj):
-            cuts = json.load(open(cj))
-            item.update(minutes_in=cuts["source_minutes"], minutes_out=cuts["output_minutes"],
-                        cuts=[[x["from"], x["to"]] for x in cuts["removed"]])
-        mj = os.path.join(d, base + ".metadata.json")
-        if os.path.exists(mj):
-            m = json.load(open(mj))
-            item.update(titles=m["titles"], description=m["description"], chapters=m["chapters"],
-                        tags=m["tags"], pinned_comment=m.get("pinned_comment", ""))
-        else:
-            item.update(titles=c.get("titles", []), description="", chapters=[], tags=[])
-        convs.append(item)
-    p["conversations"] = convs
-    p["shorts"] = [{"name": f"{i:02d}-short-{clipstudio_slug(s['category'])}", "category": s["category"],
-                    "hook": s["hook"], "video": f"drafts/{i:02d}-short-{clipstudio_slug(s['category'])}.mp4",
-                    "approved": False} for i, s in enumerate(plan.get("shorts", []), 1)]
+# ---------------- review helpers ----------------
+@app.get("/api/projects/{pid}/preview")
+def preview(pid: str, start: float = Query(...), end: float = Query(...)):
+    """A small playable clip of the recording, cut on demand (works for MKV sources too)."""
+    d = pdir(pid)
+    src = load(pid)["source"]
+    start, end = max(0.0, start), max(start + 0.5, end)
+    if end - start > 600:
+        raise HTTPException(400, "Previews are limited to 10 minutes.")
+    cache = os.path.join(d, "work", "previews")
+    os.makedirs(cache, exist_ok=True)
+    out = os.path.join(cache, f"{start:.2f}-{end:.2f}.mp4")
+    if not media.valid_media(out, min_seconds=0.3):
+        tmp = media.tmp_name(out) + f".{uuid.uuid4().hex[:6]}.mp4"
+        media.run([paths.ffmpeg(), "-y", "-ss", f"{start:.3f}", "-t", f"{end - start:.3f}", "-i", src,
+                   "-vf", "scale=-2:360", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+                   "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", tmp])
+        os.replace(tmp, out)
+    return FileResponse(out, media_type="video/mp4")
 
 
-def clipstudio_slug(s):
-    return "".join(ch.lower() if ch.isalnum() else "-" for ch in s).strip("-")[:40]
+@app.get("/api/projects/{pid}/transcript")
+def transcript(pid: str, start: float = Query(...), end: float = Query(...)):
+    """The words around a moment, corrected, for reading context next to a preview."""
+    d = pdir(pid)
+    tr = pipeline.corrected_transcript(d)
+    return [{"start": s["start"], "end": s["end"], "text": s["text"]}
+            for s in tr["segments"] if s["end"] > start and s["start"] < end]
 
 
 @app.get("/media/{pid}/{path:path}")
-def media(pid: str, path: str):
+def media_file(pid: str, path: str):
     base = os.path.realpath(pdir(pid))
     f = os.path.realpath(os.path.join(base, path))
-    if not f.startswith(base + os.sep) and not os.path.islink(os.path.join(base, path)):
+    if not f.startswith(base + os.sep):
         raise HTTPException(403, "Outside the project folder")
-    if not os.path.exists(f):
+    if not os.path.isfile(f):
         raise HTTPException(404, "File not found")
-    name = os.path.basename(path)
-    return FileResponse(f, filename=name if name.endswith((".xml", ".srt", ".edl")) else None)
+    name = os.path.basename(f)
+    return FileResponse(f, filename=name if name.endswith((".xml", ".srt")) else None)
 
 
-app.mount("/fonts", StaticFiles(directory=os.path.join(ROOT, "assets", "fonts")), name="fonts")
+app.mount("/fonts", StaticFiles(directory=paths.FONTS), name="fonts")
 app.mount("/", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static"), html=True), name="ui")
+
+
+def start_worker():
+    queue.recover()
+    threading.Thread(target=queue.worker, daemon=True, name="clipstudio-worker").start()
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8765))

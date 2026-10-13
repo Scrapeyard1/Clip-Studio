@@ -8,3 +8,7 @@ opencv-contrib-python>=4.10
 onnxruntime
 pillow
 yt-dlp
+
+# tests (optional)
+pytest
+httpx

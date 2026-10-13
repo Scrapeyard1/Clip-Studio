@@ -1,103 +1,276 @@
-"""Clip Studio: one command from a recorded live to review-ready drafts.
+"""Clip Studio pipeline, in two stages so a person reviews before anything heavy renders.
 
-    python clipstudio.py process  "D:/Lives/2026-10-01.mkv"     # everything below, in order
-    python clipstudio.py render-long  <live dir> <plan.json>      # re-render one conversation
-    python clipstudio.py render-short <live dir> <clip.json>      # re-render one short
+  analyze(project)          audio -> transcript -> quiet stretches -> Claude's plan (validated)
+  render(project, ids)      only the conversations/shorts the reviewer selected
 
-Steps for `process`:
-  1. extract 16 kHz audio (streams the file; a 5 GB recording uses no extra RAM)
-  2. transcribe locally with word timestamps (Parakeet via sherpa-onnx; no cloud)
-  3. measure quiet stretches (so sound effects and laughter are never cut)
-  4. plan: Claude reads the transcript -> conversations, cold opens, titles, shorts
-  5. render every conversation (long-form) and every short into <live dir>/drafts
-Each step skips itself if its output already exists, so a crash resumes where it stopped.
+A project folder looks like:
+  project.json      title, source, status (owned by the app)
+  edits.json        everything a PERSON changed: boundaries, cold opens, restored pauses, framing,
+                    titles, approvals, term corrections. Never overwritten by AI output.
+  source/           an uploaded or downloaded recording (unique per project)
+  work/             audio, transcripts, plan, step records
+  drafts/           finished outputs, named by item id (c1191.mp4, s3496.mp4 ...)
+
+A step only counts as finished when every output it promises exists AND passes a check
+(plays, parses, isn't empty), and when the settings it was made from haven't changed since.
+Outputs are written to temporary names and moved into place only after they pass.
+
+Command line:  python clipstudio.py analyze <project dir>
+               python clipstudio.py render  <project dir> [item ids...]
 """
-import json, os, subprocess, sys
+import hashlib
+import json
+import os
+import sys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 ENGINE = os.path.join(ROOT, "engine")
 sys.path.insert(0, ENGINE)
 
+import media  # noqa: E402
+import paths  # noqa: E402
 
-_on_step = None
-
-
-def step(name, out, fn):
-    if os.path.exists(out):
-        print(f"[skip] {name}")
-        return
-    print(f"[run ] {name}")
-    if _on_step:
-        _on_step(name)
-    fn()
+LONG_EDIT_KEYS = ("guest", "topic", "start", "end", "cold_open", "protect")
+SHORT_EDIT_KEYS = ("hook", "category", "pieces", "framing", "protect")
 
 
-def process(video, threads=os.cpu_count(), workdir=None, on_step=None, config=None):
-    global _on_step
-    _on_step = on_step
-    base = os.path.splitext(os.path.basename(video))[0]
-    d = workdir or os.path.join(os.path.dirname(os.path.abspath(video)), base + ".clipstudio")
-    os.makedirs(d, exist_ok=True)
-    wav, tr, qj, plan = (os.path.join(d, x) for x in ("audio16k.wav", "transcript.json", "quiet.json", "plan.json"))
+class Reporter:
+    """How a job tells the app what it's doing. The queue passes one per job (no globals)."""
+    def __init__(self, on_step=None, on_progress=None, cancel_event=None):
+        self.on_step, self.on_progress, self.cancel = on_step, on_progress, cancel_event
 
-    step("extract audio", wav, lambda: subprocess.run(
-        ["ffmpeg", "-v", "error", "-y", "-i", video, "-map", "0:a:0", "-vn", "-ac", "1", "-ar", "16000",
-         "-c:a", "pcm_s16le", wav], check=True))
-    step("transcribe", tr, lambda: subprocess.run(
-        [sys.executable, os.path.join(ENGINE, "transcribe.py"), wav, tr, "--threads", str(threads)], check=True))
+    def step(self, name):
+        self.check()
+        if self.on_step:
+            self.on_step(name)
+
+    def progress(self, pct):
+        if self.on_progress and pct != getattr(self, "_last", None):     # only write when the number changes
+            self._last = pct
+            self.on_progress(pct)
+
+    def check(self):
+        if self.cancel is not None and self.cancel.is_set():
+            raise media.Cancelled()
+
+
+# ---------------- project files ----------------
+def load(d, name, default=None):
+    p = os.path.join(d, name)
+    return json.load(open(p, encoding="utf-8")) if os.path.exists(p) else default
+
+
+def edits(d):
+    e = load(d, "edits.json", {}) or {}
+    e.setdefault("items", {})
+    e.setdefault("glossary", None)
+    return e
+
+
+def glossary_text(d):
+    import glossary
+    g = edits(d)["glossary"]
+    return glossary.DEFAULTS if g is None else g
+
+
+def effective_items(d):
+    """AI plan with the person's edits laid over it, item by item (matched by stable id)."""
+    plan = load(os.path.join(d, "work"), "plan.json", {"conversations": [], "shorts": []})
+    e = edits(d)["items"]
+    convs, shorts = [], []
+    for c in plan.get("conversations", []):
+        convs.append({**c, **{k: v for k, v in e.get(c["id"], {}).items() if k in LONG_EDIT_KEYS}, "kind": "long"})
+    for s in plan.get("shorts", []):
+        shorts.append({**s, **{k: v for k, v in e.get(s["id"], {}).items() if k in SHORT_EDIT_KEYS}, "kind": "short"})
+    return convs, shorts
+
+
+def corrected_transcript(d):
+    import glossary
+    raw = load(os.path.join(d, "work"), "transcript.json")
+    fixed, _ = glossary.apply(raw, glossary_text(d))
+    return fixed
+
+
+# ---------------- checked steps ----------------
+def _fingerprint(inputs):
+    return hashlib.sha256(json.dumps(inputs, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
+def step_state(d, key, outputs, inputs=None):
+    """'done' only if the record exists, every output is still there with the recorded size and
+    passes its check, and the inputs fingerprint matches. Otherwise 'stale' or 'missing'."""
+    rec = load(os.path.join(d, "work", "steps"), key + ".json")
+    if not rec:
+        return "missing"
+    if inputs is not None and rec.get("inputs") != _fingerprint(inputs):
+        return "stale"
+    for p in outputs:
+        if not os.path.exists(p) or os.path.getsize(p) != rec["sizes"].get(os.path.basename(p)):
+            return "missing"
+    return "done"
+
+
+def run_step(d, key, label, outputs, fn, rep, inputs=None):
+    if step_state(d, key, outputs, inputs) == "done" and all(media.valid_output(p) for p in outputs):
+        return False
+    rep.step(label)
+    try:
+        fn()
+    except BaseException:
+        for o in outputs:                       # a stopped or failed step leaves no half-written files
+            try:
+                os.remove(media.tmp_name(o))
+            except OSError:
+                pass
+        raise
+    bad = [os.path.basename(p) for p in outputs if not media.valid_output(p)]
+    if bad:
+        raise RuntimeError(f"{label}: {', '.join(bad)} didn't come out right. Press Retry to redo it.")
+    os.makedirs(os.path.join(d, "work", "steps"), exist_ok=True)
+    media.write_json(os.path.join(d, "work", "steps", key + ".json"),
+                     {"inputs": _fingerprint(inputs) if inputs is not None else None,
+                      "sizes": {os.path.basename(p): os.path.getsize(p) for p in outputs}})
+    return True
+
+
+# ---------------- stage 1: analyze ----------------
+def analyze(d, source, rep=None, threads=None):
+    rep = rep or Reporter()
+    w = os.path.join(d, "work")
+    os.makedirs(w, exist_ok=True)
+    wav, tr, qj, pj = (os.path.join(w, x) for x in ("audio16k.wav", "transcript.json", "quiet.json", "plan.json"))
+
+    def extract():
+        tmp = media.tmp_name(wav)
+        media.run([paths.ffmpeg(), "-v", "error", "-y", "-i", source, "-map", "0:a:0", "-vn", "-ac", "1",
+                   "-ar", "16000", "-c:a", "pcm_s16le", tmp])
+        media.commit(tmp, wav)
+    run_step(d, "audio", "Extract audio", [wav], extract, rep, inputs=[source, os.path.getsize(source)])
+
+    run_step(d, "transcript", "Transcribe", [tr], lambda: media.run(
+        [sys.executable, os.path.join(ENGINE, "transcribe.py"), wav, tr, "--threads", str(threads or os.cpu_count())]),
+        rep, inputs=[os.path.getsize(wav)])
 
     def quiet():
         from cuts import detect_quiet
-        json.dump(detect_quiet(wav), open(qj, "w"))
-    step("measure quiet stretches", qj, quiet)
+        media.write_json(qj, detect_quiet(wav))
+    run_step(d, "quiet", "Measure quiet stretches", [qj], quiet, rep, inputs=[os.path.getsize(wav)])
 
-    def make_plan():
+    def plan():
         from moments import plan as claude_plan
-        json.dump(claude_plan(json.load(open(tr))), open(plan, "w"), indent=1)
-    step("plan with Claude", plan, make_plan)
-
-    p = json.load(open(plan))
-    drafts = os.path.join(d, "drafts")
-    os.makedirs(drafts, exist_ok=True)
-    for i, c in enumerate(p["conversations"], 1):
-        c = dict(c, name=f"{i:02d}-long-{slug(c['guest'])}")
-        f = os.path.join(d, c["name"] + ".json"); json.dump(c, open(f, "w"))
-        step(f"long-form {c['name']}", os.path.join(drafts, c["name"] + ".mp4"), lambda f=f: subprocess.run(
-            [sys.executable, os.path.join(ENGINE, "render_long.py"), "--video", video, "--transcript", tr,
-             "--quiet", qj, "--plan", f, "--out", drafts, "--config", json.dumps(config or {})], check=True))
-
-        def meta(c=c):
-            from cuts import safe_cuts
-            from metadata import write
-            keep = safe_cuts(json.load(open(tr)), c["start"], c["end"], "long", c.get("protect", []),
-                             json.load(open(qj))).keep
-            json.dump(write(json.load(open(tr)), c, keep), open(os.path.join(drafts, c["name"] + ".metadata.json"), "w"),
-                      indent=1)
-        step(f"titles {c['name']}", os.path.join(drafts, c["name"] + ".metadata.json"), meta)
-        if (config or {}).get("host_photos"):
-            step(f"thumbnails {c['name']}", os.path.join(drafts, c["name"] + ".thumb1.jpg"),
-                 lambda c=c: make_thumbnails(video, c, drafts, config["host_photos"]))
-    for i, s in enumerate(p["shorts"], 1):
-        s = dict(s, name=f"{i:02d}-short-{slug(s['category'])}")
-        f = os.path.join(d, s["name"] + ".json"); json.dump(s, open(f, "w"))
-        step(f"short {s['name']}", os.path.join(drafts, s["name"] + ".mp4"), lambda f=f: subprocess.run(
-            [sys.executable, os.path.join(ENGINE, "render_short.py"), "--video", video, "--transcript", tr,
-             "--quiet", qj, "--clip", f, "--out", drafts], check=True))
-    print("drafts ready in", drafts)
+        clean, problems = claude_plan(corrected_transcript(d))
+        clean["problems"] = problems
+        media.write_json(pj, clean)
+    run_step(d, "plan", "Find conversations and shorts", [pj], plan, rep, inputs=[os.path.getsize(tr)])
 
 
-def make_thumbnails(video, conv, drafts, photos_dir):
+# ---------------- stage 2: render selected ----------------
+def outputs_for(d, item):
+    dr = os.path.join(d, "drafts")
+    if item["kind"] == "long":
+        import render_long
+        return render_long.outputs(dr, item["id"])
+    return {"video": os.path.join(dr, item["id"] + ".mp4")}
+
+
+def render_inputs(d, item, cfg):
+    """Everything a render depends on; if any of it changes, the render is stale."""
+    keys = LONG_EDIT_KEYS if item["kind"] == "long" else SHORT_EDIT_KEYS
+    return {"item": {k: item.get(k) for k in keys}, "glossary": glossary_text(d),
+            "sting": cfg.get("sting"), "outro": cfg.get("outro"), "v": 2}
+
+
+def render_problems(item):
+    """Why an item can't be rendered yet, in words for the review screen ([] = ready)."""
+    out = []
+    if item["kind"] == "long":
+        if not item.get("cold_open"):
+            out.append("Pick at least one cold-open clip.")
+        if not (item.get("end", 0) - item.get("start", 0) >= 60):
+            out.append("The conversation needs to be at least a minute long.")
+        if any(not (item["start"] - 1 <= a < b <= item["end"] + 1) for a, b in item.get("cold_open", [])):
+            out.append("Every cold-open clip must come from inside the conversation.")
+    else:
+        if not item.get("pieces"):
+            out.append("Add at least one clip.")
+        if any(b <= a for a, b in item.get("pieces", [])):
+            out.append("Each clip must end after it starts.")
+    return out
+
+
+def render(d, source, ids, cfg=None, rep=None):
+    cfg = cfg or {}
+    rep = rep or Reporter()
+    w = os.path.join(d, "work")
+    quiet = load(w, "quiet.json")
+    tr = corrected_transcript(d)
+    convs, shorts = effective_items(d)
+    by_id = {i["id"]: i for i in convs + shorts}
+    missing = [i for i in ids if i not in by_id]
+    if missing:
+        raise RuntimeError(f"These items aren't in the plan anymore: {', '.join(missing)}")
+    blocked = [f"{by_id[i].get('guest') or by_id[i].get('hook')}: {' '.join(render_problems(by_id[i]))}"
+               for i in ids if render_problems(by_id[i])]
+    if blocked:
+        raise RuntimeError("Fix these before rendering. " + " | ".join(blocked))
+    def expected_seconds(it):
+        if it["kind"] == "long":
+            return it["end"] - it["start"] + sum(b - a for a, b in it.get("cold_open", [])) + 7
+        return sum(b - a for a, b in it["pieces"])
+    for n, iid in enumerate(ids, 1):
+        item = by_id[iid]
+        rep.progress(int(100 * (n - 1) / len(ids)))
+        # inside one item, move the bar with FFmpeg's position (rendering a long-form passes over the
+        # footage about twice: pieces, then joining them)
+        total = 2 * expected_seconds(item) if item["kind"] == "long" else expected_seconds(item)
+        media.progress.done = 0.0
+        media.progress.fn = lambda sec, n=n, total=total: rep.progress(
+            int(100 * (n - 1 + min(0.99, sec / max(total, 1))) / len(ids)))
+        outs = outputs_for(d, item)
+        inputs = render_inputs(d, item, cfg)
+        label = item.get("guest") or item.get("hook") or iid
+        if item["kind"] == "long":
+            import render_long
+            run_step(d, f"render-{iid}", f"Render: {label}", list(outs.values()),
+                     lambda item=item: render_long.render(source, tr, dict(item, name=iid),
+                                                          os.path.join(d, "drafts"), cfg, quiet), rep, inputs)
+            if os.environ.get("ANTHROPIC_API_KEY"):
+                mj = os.path.join(d, "drafts", iid + ".metadata.json")
+
+                def meta(item=item, mj=mj):
+                    from metadata import write
+                    from timeline import Timeline
+                    media.write_json(mj, write(tr, item, Timeline.load(outs["timeline"])))
+                run_step(d, f"titles-{iid}", f"Titles and description: {label}", [mj], meta, rep, inputs)
+            if cfg.get("host_photos") and os.path.exists(os.path.join(d, "drafts", iid + ".metadata.json")):
+                thumbs = [os.path.join(d, "drafts", f"{iid}.thumb{k}.jpg") for k in (1, 2, 3)]
+                run_step(d, f"thumbs-{iid}", f"Thumbnails: {label}", thumbs,
+                         lambda item=item: make_thumbnails(source, item, d, cfg["host_photos"]), rep,
+                         dict(inputs, photos=sorted(os.listdir(cfg["host_photos"]))))
+        else:
+            import render_short
+            run_step(d, f"render-{iid}", f"Render short: {label}", [outs["video"]],
+                     lambda item=item: render_short.render(source, tr, dict(item, name=iid),
+                                                           os.path.join(d, "drafts"), quiet), rep, inputs)
+    media.progress.fn = None
+    rep.progress(100)
+
+
+def make_thumbnails(video, conv, d, photos_dir):
     """3 thumbnails from the titles step's briefs. Host photo is picked by expression from the photo
     folder (file names like pointing-1.jpg, shocked.png). Background: a verse screen from the
     conversation if there is one, else the dark studio gradient."""
-    import cv2, numpy as np
+    import cv2
+    import numpy as np
     from PIL import Image
     import thumbnail as T
-    briefs = json.load(open(os.path.join(drafts, conv["name"] + ".metadata.json")))["thumbnail"]
+    drafts = os.path.join(d, "drafts")
+    briefs = load(drafts, conv["id"] + ".metadata.json")["thumbnail"]
     photos = [os.path.join(photos_dir, f) for f in sorted(os.listdir(photos_dir))
               if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))]
     if not photos:
-        return
+        raise RuntimeError("The thumbnail photo folder has no photos in it.")
     cap, bg = cv2.VideoCapture(video), None
     for t in np.linspace(conv["start"], conv["end"], 40):
         cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000)
@@ -114,15 +287,21 @@ def make_thumbnails(video, conv, drafts, photos_dir):
         preset = b["preset"] if b["preset"] in ("solo", "banner", "bubble") else "solo"   # guest images: next phase
         if preset == "bubble":
             lines = [x for line in lines for x in line]
-        T.make(preset, host, lines, bg=bg, out=os.path.join(drafts, f"{conv['name']}.thumb{i}.jpg"))
-
-
-def slug(s):
-    return "".join(ch.lower() if ch.isalnum() else "-" for ch in s).strip("-")[:40]
+        final = os.path.join(drafts, f"{conv['id']}.thumb{i}.jpg")
+        tmp = media.tmp_name(final)
+        T.make(preset, host, lines, bg=bg, out=tmp)
+        media.commit(tmp, final)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) >= 3 and sys.argv[1] == "process":
-        process(sys.argv[2])
+    if len(sys.argv) >= 3 and sys.argv[1] in ("analyze", "render"):
+        proj = os.path.abspath(sys.argv[2])
+        meta = load(proj, "project.json")
+        if sys.argv[1] == "analyze":
+            analyze(proj, meta["source"], Reporter(on_step=print))
+        else:
+            c, s = effective_items(proj)
+            ids = sys.argv[3:] or [i["id"] for i in c + s]
+            render(proj, meta["source"], ids, rep=Reporter(on_step=print))
     else:
         print(__doc__)
