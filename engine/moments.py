@@ -4,7 +4,7 @@ Sends the timestamped transcript to Claude with the channel's editing recipe and
 gets back a JSON plan: the guest conversations, a cold open for each, safe-cut
 protections, stream housekeeping to flag, and ranked short candidates.
 
-Needs ANTHROPIC_API_KEY. Cost: a 3-hour live is ~40k input tokens, about $0.10-0.50.
+Needs ANTHROPIC_API_KEY. A 2h40m live is ~50k input tokens: about $0.20-0.50 on Sonnet 5.5.
 """
 import argparse, json, os
 
@@ -33,27 +33,21 @@ Use only times that appear in the transcript. Seconds as numbers."""
 
 
 def condensed(transcript):
-    out = []
-    for s in transcript["segments"]:
-        out.append(f"[{s['start']:.1f}-{s['end']:.1f}] {s['text']}")
+    """One line per transcript segment, stamped with its start (each line ends where the next begins)."""
+    out = [f"[{s['start']:.1f}] {s['text']}" for s in transcript["segments"]]
+    out.append(f"[{transcript['duration']:.1f}] (end of recording)")
     return "\n".join(out)
 
 
-def _ask(client, model, messages):
-    msg = client.messages.create(model=model, max_tokens=16000, system=RECIPE, messages=messages)
-    return "".join(b.text for b in msg.content if b.type == "text")
-
-
-def plan(transcript, model="claude-sonnet-5-5"):
+def plan(transcript, model=None):
     """Ask Claude for a plan, check it, and ask once more with the problems if it can't be used."""
-    import anthropic
+    from claude_api import ask, extract_json
     from plan_check import PlanError, validate
-    client = anthropic.Anthropic()
     messages = [{"role": "user", "content": condensed(transcript)}]
-    text = _ask(client, model, messages)
+    text, _ = ask(RECIPE, messages, model=model)
     for attempt in (1, 2):
         try:
-            raw = json.loads(text[text.index("{"): text.rindex("}") + 1])
+            raw = extract_json(text)
             clean, problems = validate(raw, transcript["duration"])
             return clean, problems
         except (ValueError, PlanError) as e:
@@ -61,7 +55,7 @@ def plan(transcript, model="claude-sonnet-5-5"):
                 raise PlanError(f"Claude's plan couldn't be used twice in a row ({e}). Press Retry to ask again.")
             messages += [{"role": "assistant", "content": text},
                          {"role": "user", "content": f"That plan can't be used: {e} Return the corrected JSON only."}]
-            text = _ask(client, model, messages)
+            text, _ = ask(RECIPE, messages, model=model)
 
 
 if __name__ == "__main__":

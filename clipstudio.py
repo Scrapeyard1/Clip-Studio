@@ -67,6 +67,42 @@ def edits(d):
     return e
 
 
+def _spans(item):
+    return item["pieces"] if "pieces" in item else [[item["start"], item["end"]]]
+
+
+def _shared(a, b):
+    """How much of the smaller item the two items share, from their actual pieces (0..1)."""
+    both = sum(max(0.0, min(y0, y1) - max(x0, x1)) for x0, y0 in _spans(a) for x1, y1 in _spans(b))
+    la, lb = (sum(y - x for x, y in _spans(i)) for i in (a, b))
+    return both / max(1e-6, min(la, lb))
+
+
+def carry_edits(d, old_plan, new_plan):
+    """A new plan can shift a clip by a few seconds, which changes its id. Move the person's edits
+    from each vanished id onto the new item that covers the same stretch (at least half of it), so
+    a re-plan never silently drops a framing choice, title or approval. Returns {old_id: new_id}."""
+    e = edits(d)
+    old = {i["id"]: i for k in ("conversations", "shorts") for i in (old_plan or {}).get(k, [])}
+    new_by_kind = {"conversations": (new_plan or {}).get("conversations", []),
+                   "shorts": (new_plan or {}).get("shorts", [])}
+    new_ids = {i["id"] for v in new_by_kind.values() for i in v}
+    moved = {}
+    for oid in [k for k in e["items"] if k not in new_ids and k in old]:
+        kind = "shorts" if oid.startswith("s") else "conversations"
+        best, best_f = None, 0.5
+        for it in new_by_kind[kind]:
+            f = _shared(old[oid], it)
+            if f > best_f and it["id"] not in e["items"]:
+                best, best_f = it["id"], f
+        if best:
+            e["items"][best] = dict(e["items"].pop(oid), moved_from=oid)
+            moved[oid] = best
+    if moved:
+        media.write_json(os.path.join(d, "edits.json"), e)
+    return moved
+
+
 def glossary_text(d):
     import glossary
     g = edits(d)["glossary"]
@@ -159,8 +195,11 @@ def analyze(d, source, rep=None, threads=None):
 
     def plan():
         from moments import plan as claude_plan
+        previous = load(w, "plan.json") or load(w, "plan.previous.json")
         clean, problems = claude_plan(corrected_transcript(d))
-        clean["problems"] = problems
+        moved = carry_edits(d, previous, clean)
+        clean["problems"] = problems + [f"Your edits on {a} moved to {b}, the same stretch in the new plan."
+                                        for a, b in moved.items()]
         media.write_json(pj, clean)
     run_step(d, "plan", "Find conversations and shorts", [pj], plan, rep, inputs=[os.path.getsize(tr)])
 

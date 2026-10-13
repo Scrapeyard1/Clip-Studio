@@ -480,9 +480,11 @@ def retry(pid: str):
 def replan(pid: str):
     """Ask Claude for a fresh plan. The person's edits are kept and re-applied to items whose id survives."""
     d = pdir(pid)
-    for f in (os.path.join(d, "work", "plan.json"), os.path.join(d, "work", "steps", "plan.json")):
-        if os.path.exists(f):
-            os.remove(f)
+    w = os.path.join(d, "work")
+    if os.path.exists(os.path.join(w, "plan.json")):        # kept so edits can follow their clips
+        os.replace(os.path.join(w, "plan.json"), os.path.join(w, "plan.previous.json"))
+    if os.path.exists(os.path.join(w, "steps", "plan.json")):
+        os.remove(os.path.join(w, "steps", "plan.json"))
     queue.add(pid, "analyze")
     return load(pid)
 

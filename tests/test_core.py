@@ -345,3 +345,25 @@ def test_caller_short_renders_with_badge(tmp_path):
     assert (info["width"], info["height"]) == (1080, 1920)
     assert abs(info["duration"] - out["seconds"]) < 0.2
     assert not [f for f in os.listdir(tmp_path) if f.startswith("short-")]      # work folder cleaned up
+
+
+def test_edits_follow_a_clip_when_a_new_plan_shifts_it(tmp_path):
+    d = str(tmp_path)
+    media.write_json(os.path.join(d, "edits.json"), {"items": {"s1276": {"framing": "guest"},
+                                                               "s9000": {"approved": True}}})
+    old = {"conversations": [], "shorts": [{"id": "s1276", "pieces": [[1276.6, 1281.9], [3496.8, 3550.8]]},
+                                           {"id": "s9000", "pieces": [[9000, 9030]]}]}
+    new = {"conversations": [], "shorts": [{"id": "s1279", "pieces": [[1279.0, 1283.0], [3497.0, 3553.0]]}]}
+    assert pipeline.carry_edits(d, old, new) == {"s1276": "s1279"}
+    e = pipeline.edits(d)["items"]
+    assert e["s1279"]["framing"] == "guest" and "s1276" not in e
+    assert e["s9000"] == {"approved": True}        # no overlapping clip: kept, not thrown away
+
+
+def test_edits_dont_jump_to_a_clip_between_far_apart_pieces(tmp_path):
+    d = str(tmp_path)
+    media.write_json(os.path.join(d, "edits.json"), {"items": {"s1276": {"framing": "guest"}}})
+    old = {"shorts": [{"id": "s1276", "pieces": [[1276.6, 1281.9], [3496.8, 3550.8]]}]}
+    new = {"shorts": [{"id": "s1960", "pieces": [[1960, 2005]]},             # sits between the pieces
+                      {"id": "s1279", "pieces": [[1279.0, 1283.0], [3497.0, 3553.0]]}]}
+    assert pipeline.carry_edits(d, old, new) == {"s1276": "s1279"}

@@ -69,16 +69,13 @@ def clean_chapters(chapters, timeline):
     return out
 
 
-def write(transcript, item, timeline, model="claude-sonnet-5-5"):
-    import anthropic
+def write(transcript, item, timeline, model=None):
+    from claude_api import ask, extract_json
     text = final_timeline_transcript(transcript, timeline)
-    msg = anthropic.Anthropic().messages.create(
-        model=model, max_tokens=4000, system=STYLE,
-        messages=[{"role": "user", "content": f"Guest: {item.get('guest', 'caller')}\n"
-                   f"The video is {chapter_stamp(timeline.seconds)} long; the cold open runs until "
-                   f"{chapter_stamp(timeline.body_start())}.\n\n{text}"}])
-    out = "".join(b.text for b in msg.content if b.type == "text")
-    data = json.loads(out[out.index("{"): out.rindex("}") + 1])
+    out, _ = ask(STYLE, [{"role": "user", "content": f"Guest: {item.get('guest', 'caller')}\n"
+                          f"The video is {chapter_stamp(timeline.seconds)} long; the cold open runs until "
+                          f"{chapter_stamp(timeline.body_start())}.\n\n{text}"}], max_tokens=16000, model=model)
+    data = extract_json(out)
     data["chapters"] = clean_chapters(data.get("chapters"), timeline)
     data["titles"] = [str(t)[:100] for t in data.get("titles", [])][:3]
     return data
