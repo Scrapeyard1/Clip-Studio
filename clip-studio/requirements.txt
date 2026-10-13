@@ -1,0 +1,10 @@
+anthropic
+fastapi
+uvicorn
+python-multipart
+sherpa-onnx>=1.12
+numpy
+opencv-contrib-python>=4.10
+onnxruntime
+pillow
+yt-dlp

@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clip Studio</title>
+<style>
+@font-face { font-family: "Anton"; src: url("/fonts/Anton-Regular.ttf") format("truetype"); font-display: swap; }
+@font-face { font-family: "Archivo"; src: url("/fonts/Archivo.ttf") format("truetype"); font-weight: 100 900; font-stretch: 62% 125%; font-display: swap; }
+:root {
+  --night: #0D1420;   /* the blue-black of the stream room */
+  --deck: #141E30;    /* panels */
+  --deck-2: #1A263B;
+  --rule: #26344C;
+  --paper: #EEF1F6;
+  --mist: #8E9AB0;
+  --gold: #FFC83A;    /* chosen, approved, cold open */
+  --cut: #F0444B;     /* trimmed pauses */
+  --radius-s: 6px; --radius-m: 10px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--night); color: var(--paper); }
+body { font: 400 15px/1.5 "Archivo", system-ui, sans-serif; font-stretch: 100%; }
+:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+button, input, textarea { font: inherit; color: inherit; }
+a { color: inherit; }
+.app { display: grid; grid-template-columns: 248px 1fr; min-height: 100vh; }
+
+/* rail */
+.rail { border-right: 1px solid var(--rule); padding: 22px 16px; display: flex; flex-direction: column; gap: 18px; position: sticky; top: 0; height: 100vh; }
+.brand { font: 400 26px/1 "Anton", sans-serif; letter-spacing: .5px; }
+.brand span { color: var(--gold); }
+.add { background: var(--gold); color: #1B1300; border: 0; border-radius: var(--radius-s); padding: 11px 12px; font-weight: 700; cursor: pointer; text-align: left; }
+.add:hover { filter: brightness(1.06); }
+.lives { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; overflow: auto; }
+.lives button { width: 100%; text-align: left; background: none; border: 0; border-radius: var(--radius-s); padding: 9px 10px; cursor: pointer; display: grid; gap: 1px; }
+.lives button:hover { background: var(--deck); }
+.lives button[aria-current="true"] { background: var(--deck-2); box-shadow: inset 3px 0 0 var(--gold); }
+.lives .t { font-weight: 600; line-height: 1.25; }
+.lives .s { color: var(--mist); font-size: 13px; font-stretch: 88%; }
+
+/* main */
+main { padding: 34px 44px 80px; max-width: 1280px; width: 100%; }
+.head h1 { font: 400 clamp(34px, 4vw, 54px)/1.02 "Anton", sans-serif; margin: 0 0 6px; letter-spacing: .3px; }
+.head p { margin: 0; color: var(--mist); }
+.note { margin: 14px 0 0; padding: 10px 12px; border-left: 3px solid var(--rule); color: var(--mist); font-size: 14px; max-width: 75ch; }
+
+/* the live map: the whole stream as one strip */
+.map { margin: 30px 0 44px; }
+.map-scale { position: relative; height: 22px; color: var(--mist); font: 400 13px/1 "Anton", sans-serif; letter-spacing: .4px; }
+.map-scale span { position: absolute; transform: translateX(-50%); }
+.map-scale span:first-child { transform: none; }
+.map-track { position: relative; height: 112px; background: repeating-linear-gradient(90deg, transparent 0 calc(100%/18 - 1px), var(--rule) calc(100%/18 - 1px) calc(100%/18)); border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+.seg { position: absolute; top: 14px; bottom: 14px; border-radius: 4px; background: var(--deck-2); border: 1px solid var(--rule); cursor: pointer; overflow: hidden; padding: 8px 9px; text-align: left; }
+.seg:hover { border-color: var(--mist); }
+.seg.done { background: #2A2410; border-color: var(--gold); }
+.seg .g { font: 400 18px/1.05 "Anton", sans-serif; white-space: nowrap; }
+.seg .tp { font-size: 12px; color: var(--mist); font-stretch: 85%; white-space: nowrap; }
+.seg.narrow .g, .seg.narrow .tp { display: none; }
+.tick { position: absolute; bottom: 0; width: 2px; height: 10px; background: var(--cut); }
+.notch { position: absolute; top: 0; height: 6px; background: var(--gold); }
+.map-legend { display: flex; gap: 22px; margin-top: 10px; color: var(--mist); font-size: 13px; }
+.map-legend i { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; border-radius: 2px; }
+
+/* sections */
+h2 { font: 400 30px/1 "Anton", sans-serif; margin: 0 0 18px; letter-spacing: .3px; }
+.convo { border-top: 1px solid var(--rule); padding: 30px 0 36px; scroll-margin-top: 20px; }
+.convo-top { display: flex; justify-content: space-between; align-items: baseline; gap: 20px; flex-wrap: wrap; margin-bottom: 18px; }
+.convo-top h3 { font: 400 34px/1.05 "Anton", sans-serif; margin: 0; }
+.convo-top .topic { color: var(--mist); margin-top: 4px; }
+.rank { font-weight: 700; font-size: 13px; padding: 3px 9px; border-radius: 99px; background: var(--gold); color: #1B1300; vertical-align: 6px; margin-left: 10px; }
+.stat { color: var(--mist); font-size: 14px; text-align: right; }
+.stat b { color: var(--paper); font: 400 22px/1 "Anton", sans-serif; }
+.grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 28px; align-items: start; }
+video { width: 100%; border-radius: var(--radius-m); background: #000; display: block; }
+.field { margin-bottom: 22px; }
+.field > .lab { font-weight: 650; margin-bottom: 8px; display: flex; justify-content: space-between; }
+.field > .lab small { color: var(--mist); font-weight: 400; }
+.title-opt { display: grid; grid-template-columns: 22px 1fr auto; gap: 8px; align-items: center; padding: 6px 8px; border-radius: var(--radius-s); }
+.title-opt:has(input[type=radio]:checked) { background: var(--deck-2); }
+.title-opt input[type=radio] { accent-color: var(--gold); width: 16px; height: 16px; }
+.title-opt input[type=text] { background: none; border: 0; border-bottom: 1px solid transparent; padding: 3px 0; font-weight: 600; width: 100%; }
+.title-opt input[type=text]:focus { border-bottom-color: var(--gold); outline: none; }
+.count { font-size: 12px; color: var(--mist); font-stretch: 85%; }
+.count.long { color: var(--cut); }
+.thumbs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.thumbs button { padding: 0; border: 2px solid transparent; border-radius: var(--radius-s); background: none; cursor: pointer; overflow: hidden; line-height: 0; }
+.thumbs button[aria-pressed="true"] { border-color: var(--gold); }
+.thumbs img { width: 100%; aspect-ratio: 16/9; object-fit: cover; }
+textarea { width: 100%; min-height: 150px; resize: vertical; background: var(--deck); border: 1px solid var(--rule); border-radius: var(--radius-s); padding: 10px 12px; line-height: 1.5; }
+textarea:focus { border-color: var(--gold); outline: none; }
+.chapters { list-style: none; margin: 0; padding: 0; font-size: 14px; columns: 2; column-gap: 20px; }
+.chapters li { display: flex; gap: 10px; padding: 3px 0; break-inside: avoid; }
+.chapters time { font: 400 15px/1.35 "Anton", sans-serif; color: var(--gold); min-width: 42px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; grid-column: 1 / -1; }
+.btn { background: var(--deck-2); border: 1px solid var(--rule); border-radius: var(--radius-s); padding: 9px 13px; cursor: pointer; text-decoration: none; font-weight: 600; font-size: 14px; }
+.btn:hover { border-color: var(--mist); }
+.btn.primary { background: var(--gold); color: #1B1300; border-color: var(--gold); }
+.btn[aria-pressed="true"] { background: #23401F; border-color: #4FBF6B; }
+.pending { color: var(--mist); padding: 14px 0; }
+.found { list-style: none; margin: 0; padding: 0; }
+.found li { display: grid; grid-template-columns: 180px 1fr auto; gap: 18px; align-items: baseline; padding: 11px 0; border-bottom: 1px solid var(--rule); scroll-margin-top: 20px; }
+.found .fg { font: 400 20px/1.1 "Anton", sans-serif; }
+.found .fs { color: var(--mist); font-size: 14px; font-stretch: 88%; }
+@media (max-width: 960px) { .found li { grid-template-columns: 1fr; gap: 2px; } }
+
+.shorts { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 22px; }
+.short video { aspect-ratio: 9/16; object-fit: cover; }
+.short .hook { font: 400 20px/1.1 "Anton", sans-serif; margin: 10px 0 2px; }
+.short .meta { color: var(--mist); font-size: 13px; margin-bottom: 8px; }
+
+/* add recording */
+dialog { background: var(--deck); color: var(--paper); border: 1px solid var(--rule); border-radius: var(--radius-m); padding: 26px; width: min(560px, 92vw); }
+dialog::backdrop { background: rgba(5, 9, 16, .7); }
+dialog h2 { margin-bottom: 8px; }
+.drop { display: block; border: 2px dashed var(--rule); border-radius: var(--radius-m); padding: 30px 18px; text-align: center; color: var(--mist); margin: 16px 0; cursor: pointer; }
+.drop.over { border-color: var(--gold); color: var(--paper); }
+.or { color: var(--mist); font-size: 14px; margin: 6px 0 8px; }
+.path { display: flex; gap: 8px; }
+.path input { flex: 1; background: var(--night); border: 1px solid var(--rule); border-radius: var(--radius-s); padding: 9px 11px; }
+.err { color: var(--cut); min-height: 1.5em; font-size: 14px; margin-top: 8px; }
+.settings { display: grid; gap: 14px; margin-top: 14px; }
+.settings label { display: grid; gap: 5px; font-weight: 600; }
+.settings small { font-weight: 400; color: var(--mist); font-size: 13px; }
+.settings input { background: var(--night); border: 1px solid var(--rule); border-radius: var(--radius-s); padding: 9px 11px; font-weight: 400; }
+.steps { list-style: none; padding: 0; margin: 18px 0 0; display: grid; gap: 6px; }
+.steps li::before { content: "✓ "; color: var(--gold); }
+.steps li.now::before { content: "… "; }
+.empty { padding: 60px 0; max-width: 52ch; }
+.empty h1 { font: 400 44px/1.05 "Anton", sans-serif; margin: 0 0 12px; }
+.empty p { color: var(--mist); }
+
+@media (max-width: 960px) {
+  .app { grid-template-columns: 1fr; }
+  .rail { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--rule); }
+  main { padding: 24px 16px 60px; }
+  .grid { grid-template-columns: 1fr; }
+  .chapters { columns: 1; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <nav class="rail" aria-label="Lives">
+    <div class="brand">Clip<span>Studio</span></div>
+    <button class="add" id="add">Add a recording</button>
+    <ul class="lives" id="lives"></ul>
+    <button class="btn" id="settings-btn" style="margin-top:auto">Settings</button>
+  </nav>
+  <main id="main" tabindex="-1"></main>
+</div>
+
+<dialog id="dlg" aria-labelledby="dlg-h">
+  <h2 id="dlg-h">Add a recording</h2>
+  <p style="margin:0;color:var(--mist)">MP4, MOV or MKV, any length. Clip Studio finds every conversation, cuts them, and drafts shorts, titles and thumbnails.</p>
+  <label class="drop" id="drop" tabindex="0">Drop the video here, or click to choose it
+    <input type="file" id="file" accept=".mp4,.mov,.mkv,.m4v,.webm" hidden>
+  </label>
+  <div class="or">Or use it where it already is (best for big OBS files, nothing gets copied):</div>
+  <form class="path" id="pathform">
+    <input id="path" placeholder="D:\OBS\2026-10-01 20-00-12.mkv" aria-label="File location">
+    <button class="btn primary">Start</button>
+  </form>
+  <div class="or" style="margin-top:14px">Or paste a YouTube link to one of your videos or live replays:</div>
+  <form class="path" id="linkform">
+    <input id="link" placeholder="https://www.youtube.com/watch?v=..." aria-label="YouTube link">
+    <button class="btn primary">Get video</button>
+  </form>
+  <p style="color:var(--mist);font-size:13px;margin:6px 0 0">YouTube's copy is lower quality and has one mixed audio track, so your OBS file gives better results when you have it.</p>
+  <div class="err" id="err" role="alert"></div>
+  <div style="text-align:right"><button class="btn" id="close">Close</button></div>
+</dialog>
+
+<dialog id="sdlg" aria-labelledby="sdlg-h">
+  <h2 id="sdlg-h">Settings</h2>
+  <form id="sform" class="settings">
+    <label>Claude API key <small>used for finding conversations, titles and descriptions. Stored only on this computer.</small>
+      <input name="anthropic_api_key" type="password" autocomplete="off" placeholder="sk-ant-..."></label>
+    <label>Intro sting <small>video file played after the cold open</small>
+      <input name="sting" placeholder="D:\Channel\sting.mp4"></label>
+    <label>Patreon outro <small>video file played at the end of every full conversation</small>
+      <input name="outro" placeholder="D:\Channel\patreon-outro.mp4"></label>
+    <label>Photos of Elijah for thumbnails <small>a folder of cut-out-ready photos: pointing, smirk, shocked, laughing</small>
+      <input name="host_photos" placeholder="D:\Channel\thumbnail-photos"></label>
+    <label>OBS recordings folder <small>new recordings here show up ready to add</small>
+      <input name="recordings_folder" placeholder="D:\OBS"></label>
+    <div class="err" id="serr" role="alert"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end"><button type="button" class="btn" id="sclose">Close</button><button class="btn primary">Save settings</button></div>
+  </form>
+</dialog>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const hms = t => { t = Math.round(t); const h = Math.floor(t/3600), m = Math.floor(t%3600/60), s = t%60;
+  return h ? `${h}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}` : `${m}:${String(s).padStart(2,"0")}`; };
+let current = null, poll = null;
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `Request failed (${r.status})`);
+  return r.json();
+}
+
+async function loadLives(selectId) {
+  const lives = await api("/api/projects");
+  $("#lives").innerHTML = lives.map(l => `<li><button data-id="${esc(l.id)}" aria-current="${l.id === selectId}">
+      <span class="t">${esc(l.title)}</span>
+      <span class="s">${esc(l.date || "")}</span><span class="s">${l.step === "done" ? `${l.rendered} of ${l.conversations} conversations cut` : l.step === "error" ? "needs attention" : "working: " + esc(l.step)}</span>
+    </button></li>`).join("");
+  $("#lives").onclick = e => { const b = e.target.closest("button"); if (b) open(b.dataset.id); };
+  if (!lives.length) emptyState();
+  else if (!selectId) open(lives[0].id);
+}
+
+function emptyState() {
+  $("#main").innerHTML = `<div class="empty"><h1>Add your first live</h1>
+    <p>Choose a recording and Clip Studio will cut every guest conversation into its own video, with a short cold open, captions, three title options and thumbnails, plus vertical shorts.</p>
+    <button class="btn primary" onclick="$('#dlg').showModal()">Add a recording</button></div>`;
+}
+
+async function open(id) {
+  current = id; clearTimeout(poll);
+  document.querySelectorAll(".lives button").forEach(b => b.setAttribute("aria-current", b.dataset.id === id));
+  const p = await api(`/api/projects/${encodeURIComponent(id)}`);
+  if (p.status.step !== "done") return working(p);
+  render(p);
+}
+
+function working(p) {
+  const steps = p.status.steps || [];
+  $("#main").innerHTML = `<div class="head"><h1>${esc(p.title)}</h1>
+    <p>${p.status.step === "error" ? "Stopped" : "Working on it. You can close this window; it keeps going."}</p></div>
+    <ul class="steps">${steps.map((s, i) => { const now = i === steps.length - 1 && p.status.step !== "error";
+      return `<li class="${now ? "now" : ""}">${esc(s)}${now && p.status.progress != null ? ` (${p.status.progress}%)` : ""}</li>`; }).join("")}</ul>
+    ${p.status.step === "error" ? `<p class="err">${esc(p.status.error)}</p><button class="btn primary" id="retry">Retry</button>` : ""}`;
+  const r = $("#retry"); if (r) r.onclick = async () => { await api(`/api/projects/${encodeURIComponent(p.id)}/retry`, { method: "POST" }); open(p.id); };
+  if (p.status.step !== "error") poll = setTimeout(() => open(p.id), 4000);
+}
+
+function liveMap(p) {
+  const D = p.duration || Math.max(...p.conversations.map(c => c.end)) || 1;
+  const pct = t => (100 * t / D).toFixed(3) + "%";
+  const hours = []; for (let t = 0; t <= D; t += 1800) hours.push(t);
+  const segs = p.conversations.map(c => {
+    const w = 100 * (c.end - c.start) / D;
+    const ticks = (c.cuts || []).map(([a]) => `<span class="tick" style="left:${pct(a - c.start).replace("%","")*D/(c.end-c.start)}%"></span>`).join("");
+    const notches = (c.cold_open || []).map(([a, b]) => `<span class="notch" style="left:${(100*(a-c.start)/(c.end-c.start)).toFixed(2)}%;width:${Math.max(.4,100*(b-a)/(c.end-c.start)).toFixed(2)}%"></span>`).join("");
+    return `<button class="seg ${c.rendered ? "done" : ""} ${w < 7 ? "narrow" : ""}" style="left:${pct(c.start)};width:${w.toFixed(3)}%"
+        title="${esc(c.guest)}: ${esc(c.topic)} (${hms(c.start)} to ${hms(c.end)})" data-go="${esc(c.name)}">
+        ${notches}${ticks}<div class="g">${esc(c.guest)}</div><div class="tp">${esc(c.topic)}</div></button>`;
+  }).join("");
+  return `<section class="map" aria-label="The whole live">
+    <div class="map-scale">${hours.map(t => `<span style="left:${pct(t)}">${hms(t)}</span>`).join("")}</div>
+    <div class="map-track">${segs}</div>
+    <div class="map-legend"><span><i style="background:var(--gold)"></i>Cut and ready to review</span>
+      <span><i style="background:var(--deck-2);border:1px solid var(--rule)"></i>Found, not cut yet</span>
+      <span><i style="background:var(--cut)"></i>Trimmed pause</span></div>
+  </section>`;
+}
+
+function convo(p, c) {
+  const m = n => `/media/${encodeURIComponent(p.id)}/${n}`;
+  if (!c.rendered) return `<section class="convo" id="c-${esc(c.name)}"><div class="convo-top"><div>
+      <h3>${esc(c.guest)}</h3><div class="topic">${esc(c.topic)}, ${hms(c.start)} to ${hms(c.end)} in the live</div></div></div>
+      <div class="pending">Not cut yet.</div></section>`;
+  const titles = (c.titles || []).map((t, i) => `<label class="title-opt">
+      <input type="radio" name="t-${esc(c.name)}" value="${i}" ${i === (c.chosen_title || 0) ? "checked" : ""}>
+      <input type="text" value="${esc(t)}" data-i="${i}" aria-label="Title option ${i + 1}">
+      <span class="count ${t.length > 60 ? "long" : ""}">${t.length}</span></label>`).join("");
+  const thumbs = (c.thumbnails || []).map((t, i) => `<button aria-pressed="${i === (c.chosen_thumbnail || 0)}" data-thumb="${i}" aria-label="Thumbnail option ${i + 1}">
+      <img src="${m(t)}" alt=""></button>`).join("");
+  const chapters = (c.chapters || []).map(([t, l]) => `<li><time>${esc(t)}</time><span>${esc(l)}</span></li>`).join("");
+  return `<section class="convo" id="c-${esc(c.name)}" data-name="${esc(c.name)}">
+    <div class="convo-top"><div><h3>${esc(c.guest)}${c.rank ? `<span class="rank">${esc(c.rank.toLowerCase())}</span>` : ""}</h3>
+      <div class="topic">${esc(c.topic)}</div></div>
+      <div class="stat"><b>${(c.minutes_out ?? 0).toFixed(1)} min</b><br>from ${(c.minutes_in ?? 0).toFixed(1)} in the live, ${(c.cuts || []).length} pauses trimmed</div></div>
+    <div class="grid">
+      <div>
+        <video controls preload="metadata" src="${m(c.video)}" ${c.poster ? `poster="${m(c.poster)}"` : ""}>
+          <track kind="captions" src="${m(c.srt)}" label="Captions"></video>
+        <div class="field" style="margin-top:22px"><div class="lab">Chapters <small>go in the description</small></div><ol class="chapters">${chapters}</ol></div>
+      </div>
+      <div>
+        <div class="field"><div class="lab">Title <small>under 60 characters shows in full</small></div>${titles}</div>
+        <div class="field"><div class="lab">Thumbnail <small>upload the others to YouTube's test</small></div><div class="thumbs">${thumbs}</div></div>
+        <div class="field"><div class="lab">Description</div><textarea data-desc>${esc(c.description)}</textarea></div>
+      </div>
+      <div class="actions">
+        <a class="btn primary" href="${m(c.xml)}" download>Open in DaVinci Resolve or Premiere</a>
+        <a class="btn" href="${m(c.video)}" download>Download video</a>
+        <a class="btn" href="${m(c.srt)}" download>Captions (.srt)</a>
+        <button class="btn" data-copy>Copy description and chapters</button>
+        <button class="btn" data-approve aria-pressed="${!!c.approved}">${c.approved ? "Approved" : "Approve"}</button>
+      </div>
+    </div></section>`;
+}
+
+function shortCard(p, s) {
+  const m = n => `/media/${encodeURIComponent(p.id)}/${n}`;
+  return `<div class="short" data-name="${esc(s.name)}">
+    <video controls preload="metadata" src="${m(s.video)}" ${s.poster ? `poster="${m(s.poster)}"` : ""}></video>
+    <div class="hook">${esc(s.hook)}</div>
+    <div class="meta">${esc(s.category)}${s.seconds ? `, ${Math.round(s.seconds)} seconds` : ""}</div>
+    <a class="btn" href="${m(s.video)}" download>Download</a>
+    <button class="btn" data-approve aria-pressed="${!!s.approved}">${s.approved ? "Approved" : "Approve"}</button></div>`;
+}
+
+function render(p) {
+  const done = p.conversations.filter(c => c.rendered), todo = p.conversations.filter(c => !c.rendered);
+  $("#main").innerHTML = `<div class="head"><h1>${esc(p.title)}</h1>
+      <p>${esc(p.date)}, ${hms(p.duration || 0)} live. ${p.conversations.length} conversations found, ${done.length} cut. ${p.shorts.length} shorts.</p>
+      ${p.note ? `<p class="note">${esc(p.note)}</p>` : ""}</div>
+    ${liveMap(p)}
+    <h2>Full conversations</h2>
+    ${done.map(c => convo(p, c)).join("")}
+    ${todo.length ? `<section class="convo"><h2>Also found in this live</h2><ul class="found">${todo.map(c => `<li id="c-${esc(c.name)}">
+        <span class="fg">${esc(c.guest)}</span><span class="ft">${esc(c.topic)}</span>
+        <span class="fs">${hms(c.start)} to ${hms(c.end)}, ${Math.round((c.end - c.start) / 60)} min</span></li>`).join("")}</ul></section>` : ""}
+    <section class="convo"><h2>Shorts</h2><div class="shorts">${p.shorts.map(s => shortCard(p, s)).join("")}</div></section>`;
+  wire(p);
+}
+
+function save(p, name, changes) {
+  return api(`/api/projects/${encodeURIComponent(p.id)}/items/${encodeURIComponent(name)}`,
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(changes) });
+}
+
+function wire(p) {
+  $(".map-track").onclick = e => { const b = e.target.closest("[data-go]"); if (b) document.getElementById("c-" + b.dataset.go)?.scrollIntoView({ behavior: "smooth" }); };
+  document.querySelectorAll("[data-name]").forEach(sec => {
+    const name = sec.dataset.name, item = [...p.conversations, ...p.shorts].find(x => x.name === name);
+    sec.querySelectorAll("input[type=radio]").forEach(r => r.onchange = () => save(p, name, { chosen_title: +r.value }));
+    sec.querySelectorAll(".title-opt input[type=text]").forEach(inp => {
+      inp.oninput = () => { const c = inp.parentElement.querySelector(".count"); c.textContent = inp.value.length; c.classList.toggle("long", inp.value.length > 60); };
+      inp.onchange = () => { item.titles[+inp.dataset.i] = inp.value; save(p, name, { titles: item.titles }); };
+    });
+    sec.querySelectorAll("[data-thumb]").forEach(b => b.onclick = () => {
+      sec.querySelectorAll("[data-thumb]").forEach(x => x.setAttribute("aria-pressed", x === b));
+      save(p, name, { chosen_thumbnail: +b.dataset.thumb });
+    });
+    const ta = sec.querySelector("[data-desc]"); if (ta) ta.onchange = () => { item.description = ta.value; save(p, name, { description: ta.value }); };
+    const cp = sec.querySelector("[data-copy]"); if (cp) cp.onclick = async () => {
+      const text = `${item.description}\n\n${(item.chapters || []).map(([t, l]) => `${t} ${l}`).join("\n")}`;
+      await navigator.clipboard.writeText(text); cp.textContent = "Copied"; setTimeout(() => cp.textContent = "Copy description and chapters", 1600);
+    };
+    const ap = sec.querySelector("[data-approve]"); if (ap) ap.onclick = async () => {
+      item.approved = !item.approved; await save(p, name, { approved: item.approved });
+      ap.setAttribute("aria-pressed", item.approved); ap.textContent = item.approved ? "Approved" : "Approve";
+    };
+  });
+}
+
+/* add a recording */
+const dlg = $("#dlg"), drop = $("#drop"), err = $("#err");
+$("#add").onclick = () => { err.textContent = ""; dlg.showModal(); };
+$("#close").onclick = () => dlg.close();
+drop.onclick = () => $("#file").click();
+drop.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("#file").click(); } };
+["dragenter", "dragover"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => e.dataTransfer.files[0] && upload(e.dataTransfer.files[0]));
+$("#file").onchange = e => e.target.files[0] && upload(e.target.files[0]);
+async function upload(f) {
+  err.textContent = "";
+  const fd = new FormData(); fd.append("file", f);
+  drop.textContent = `Copying ${f.name}…`;
+  try { const p = await api("/api/projects/upload", { method: "POST", body: fd }); dlg.close(); await loadLives(p.id); open(p.id); }
+  catch (e) { err.textContent = e.message; }
+  finally { drop.textContent = "Drop the video here, or click to choose it"; }
+}
+$("#linkform").onsubmit = async e => {
+  e.preventDefault(); err.textContent = "";
+  try { const p = await api("/api/projects/from-link", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: $("#link").value }) });
+    dlg.close(); await loadLives(p.id); open(p.id); }
+  catch (e) { err.textContent = e.message; }
+};
+$("#pathform").onsubmit = async e => {
+  e.preventDefault(); err.textContent = "";
+  try { const p = await api("/api/projects/from-path", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: $("#path").value }) });
+    dlg.close(); await loadLives(p.id); open(p.id); }
+  catch (e) { err.textContent = e.message; }
+};
+
+const sdlg = $("#sdlg");
+$("#settings-btn").onclick = async () => {
+  const cur = await api("/api/settings"); $("#serr").textContent = "";
+  for (const [k, v] of Object.entries(cur)) { const i = $(`#sform [name=${k}]`); if (i) i.value = v; }
+  sdlg.showModal();
+};
+$("#sclose").onclick = () => sdlg.close();
+$("#sform").onsubmit = async e => {
+  e.preventDefault();
+  const body = Object.fromEntries(new FormData(e.target));
+  try { await api("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); sdlg.close(); }
+  catch (err) { $("#serr").textContent = err.message; }
+};
+
+loadLives();
+</script>
+</body>
+</html>
