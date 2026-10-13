@@ -1,0 +1,9 @@
+models/
+projects/*
+!projects/.keep
+work/
+out/
+deliver/
+__pycache__/
+*.pyc
+.DS_Store
