@@ -181,7 +181,9 @@ def view(pid):
                                if os.path.exists(f)]
         items.append(v)
     tr = pipeline.load(os.path.join(d, "work"), "transcript.json")
-    return {**p, "duration": tr["duration"] if tr else p.get("duration"),
+    pics = {k: f"work/{k}.jpg?v={int(os.path.getmtime(os.path.join(d, 'work', k + '.jpg')))}"
+            for k in ("poster", "strip") if os.path.exists(os.path.join(d, "work", k + ".jpg"))}
+    return {**p, "pictures": pics, "duration": tr["duration"] if tr else p.get("duration"),
             "items": items, "problems": plan.get("problems", []),
             "glossary": pipeline.glossary_text(d), "queue_position": queue.position(pid)}
 
@@ -277,8 +279,12 @@ def run_job(pid, job, ids, ev):
                 st.setdefault("steps", []).append(name)
             save(pid, p)
 
-    rep = pipeline.Reporter(on_step=on_step, on_progress=lambda pct: set_status(pid, progress=pct), cancel_event=ev)
-    set_status(pid, state="running", started_at=time.time())
+    started = time.time()
+
+    def on_progress(pct):
+        set_status(pid, progress=pct, eta=time_left(started, pct))
+    rep = pipeline.Reporter(on_step=on_step, on_progress=on_progress, cancel_event=ev)
+    set_status(pid, state="running", started_at=started, progress=0, eta=None)
     try:
         settings()
         p = load(pid)
@@ -304,6 +310,14 @@ def run_job(pid, job, ids, ev):
         set_status(pid, state="error", error=msg[:1200], trace=traceback.format_exc()[-3000:])
     finally:
         media.cancel_event.ev = None
+
+
+def time_left(started, pct, now=None):
+    """Seconds left, from how fast the bar has moved so far. None until there's enough to go on."""
+    el = (now or time.time()) - started
+    if pct is None or pct < 3 or pct >= 100 or el < 15:
+        return None
+    return int(el * (100 - pct) / pct)
 
 
 def fetch(pid, rep):
@@ -338,6 +352,16 @@ def new_project(title, source=None, link=None):
     return pid
 
 
+def quick_poster(pid, src):
+    """A picture of the recording the moment it's added (about a second)."""
+    try:
+        dur = media.probe(src)["duration"] or 60
+        os.makedirs(os.path.join(pdir(pid), "work"), exist_ok=True)
+        media.frame(src, min(dur * 0.1, 600), os.path.join(pdir(pid), "work", "poster.jpg"), 960)
+    except Exception:
+        pass
+
+
 @app.post("/api/projects/from-path")
 def add_from_path(body: dict = Body(...)):
     """Use a recording where it already sits (OBS folder): nothing is copied."""
@@ -347,6 +371,7 @@ def add_from_path(body: dict = Body(...)):
     if os.path.splitext(path)[1].lower() not in VIDEO_EXT:
         raise HTTPException(400, "Use a video file: MP4, MOV or MKV.")
     pid = new_project(body.get("title") or os.path.splitext(os.path.basename(path))[0], source=path)
+    quick_poster(pid, path)
     queue.add(pid, "analyze")
     return load(pid)
 
@@ -367,6 +392,7 @@ async def add_upload(file: UploadFile = File(...)):
     os.replace(tmp, dest)
     with _lock:
         p = load(pid); p["source"] = dest; save(pid, p)
+    quick_poster(pid, dest)
     queue.add(pid, "analyze")
     return load(pid)
 
@@ -389,13 +415,19 @@ def projects():
         f = os.path.join(PROJECTS, name, "project.json")
         if os.path.isfile(f):
             p = json.load(open(f, encoding="utf-8"))
+            if p.get("source") and not os.path.exists(os.path.join(PROJECTS, name, "work", "poster.jpg")):
+                quick_poster(p["id"], p["source"])     # one time, for lives added before pictures existed
             out.append({"id": p["id"], "title": p["title"], "date": p.get("date"), "state": p["status"].get("state"),
-                        "step": p["status"].get("step")})
+                        "step": p["status"].get("step"), "progress": p["status"].get("progress"),
+                        "poster": os.path.exists(os.path.join(PROJECTS, name, "work", "poster.jpg"))})
     return out
 
 
 @app.get("/api/projects/{pid}")
 def project(pid: str):
+    p = load(pid)
+    if p.get("source") and not os.path.exists(os.path.join(pdir(pid), "work", "poster.jpg")):
+        quick_poster(pid, p["source"])           # lives added before pictures existed get one now
     return view(pid)
 
 
@@ -403,6 +435,10 @@ def project(pid: str):
 def edit_item(pid: str, iid: str, changes: dict = Body(...)):
     """Save a person's change. Stored in edits.json, never in the AI's files, so regenerating
     plans, titles or renders can't overwrite it."""
+    return apply_edit(pid, iid, changes)
+
+
+def apply_edit(pid, iid, changes):
     d = pdir(pid)
     convs, shorts = pipeline.effective_items(d)
     item = next((i for i in convs + shorts if i["id"] == iid), None)
@@ -427,6 +463,9 @@ def edit_item(pid: str, iid: str, changes: dict = Body(...)):
     for k in ("start", "end"):
         if k in changes and not (isinstance(changes[k], (int, float)) and 0 <= changes[k] <= dur + 1):
             raise HTTPException(400, "That time is outside the recording.")
+    if item["kind"] == "long" and ("start" in changes or "end" in changes):
+        if changes.get("start", item["start"]) >= changes.get("end", item["end"]):
+            raise HTTPException(400, "The conversation has to start before it ends.")
     with _lock:
         e = load_edits(pid)
         e["items"].setdefault(iid, {}).update(changes)
@@ -517,6 +556,86 @@ def transcript(pid: str, start: float = Query(...), end: float = Query(...)):
     tr = pipeline.corrected_transcript(d)
     return [{"start": s["start"], "end": s["end"], "text": s["text"]}
             for s in tr["segments"] if s["end"] > start and s["start"] < end]
+
+
+@app.get("/api/projects/{pid}/frame")
+def frame(pid: str, t: float = Query(...), w: int = Query(480)):
+    """A still of the recording at t seconds (cached), for previews of what hasn't been rendered yet."""
+    d = pdir(pid)
+    w = min(max(int(w), 160), 1280)
+    out = os.path.join(d, "work", "frames", f"{max(0.0, t):.1f}-{w}.jpg")
+    if not os.path.exists(out):
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        try:
+            media.frame(load(pid)["source"], t, out, w)
+        except Exception:
+            raise HTTPException(404, "Couldn't read a picture at that time.")
+    return FileResponse(out, media_type="image/jpeg")
+
+
+# ---------------- chat editor ----------------
+def chat_actions(pid):
+    d = pdir(pid)
+
+    def update(iid, changes):
+        changes = {k: v for k, v in changes.items() if k not in ("selected", "approved")}
+        try:
+            return apply_edit(pid, iid, changes)
+        except HTTPException as e:
+            raise ValueError(e.detail)
+    return {"items": lambda: view(pid)["items"],
+            "transcript": lambda a, b: transcript(pid, a, b),
+            "update": update}
+
+
+@app.get("/api/projects/{pid}/chat")
+def chat_history(pid: str):
+    import editor_chat
+    return editor_chat.history(pdir(pid))
+
+
+@app.post("/api/projects/{pid}/chat")
+def chat(pid: str, body: dict = Body(...)):
+    """One message to the chat editor. It can change clips (same checks as a manual edit) and save
+    rules that every future plan follows."""
+    import editor_chat
+    from claude_api import ClaudeError
+    settings()
+    msg = str(body.get("message") or "").strip()
+    if not msg:
+        raise HTTPException(400, "Type a message first.")
+    if len(msg) > 2000:
+        raise HTTPException(400, "That message is too long. Keep it under 2,000 characters.")
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        raise HTTPException(400, "The chat editor needs your Claude API key. Add it in Settings.")
+    at = body.get("at")
+    at = float(at) if isinstance(at, (int, float)) else None
+    focus = body.get("item_id") or None
+    try:
+        return editor_chat.ask(pdir(pid), load(pid)["title"], msg, chat_actions(pid), focus_id=focus, at=at)
+    except ClaudeError as e:
+        raise HTTPException(502, str(e))
+
+
+@app.post("/api/projects/{pid}/chat/clear")
+def chat_clear(pid: str):
+    import editor_chat
+    editor_chat.clear(pdir(pid))
+    return []
+
+
+@app.get("/api/rules")
+def rules():
+    import editor_rules
+    return editor_rules.all_rules()
+
+
+@app.delete("/api/rules/{rule_id}")
+def delete_rule(rule_id: str):
+    import editor_rules
+    if not editor_rules.delete(rule_id):
+        raise HTTPException(404, "No rule with that id")
+    return editor_rules.all_rules()
 
 
 # ---------------- guest library (photos and handles, shared by every live) ----------------

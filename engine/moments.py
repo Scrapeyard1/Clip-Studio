@@ -32,6 +32,12 @@ From the timestamped transcript, return ONLY a JSON object with these keys:
 Use only times that appear in the transcript. Seconds as numbers."""
 
 
+def system_prompt():
+    """The recipe plus every editing rule Elijah has taught the chat editor."""
+    import editor_rules
+    return RECIPE + editor_rules.prompt_block("planning")
+
+
 def condensed(transcript):
     """One line per transcript segment, stamped with its start (each line ends where the next begins)."""
     out = [f"[{s['start']:.1f}] {s['text']}" for s in transcript["segments"]]
@@ -39,12 +45,12 @@ def condensed(transcript):
     return "\n".join(out)
 
 
-def plan(transcript, model=None):
+def plan(transcript, model=None, on_chars=None):
     """Ask Claude for a plan, check it, and ask once more with the problems if it can't be used."""
     from claude_api import ask, extract_json
     from plan_check import PlanError, validate
     messages = [{"role": "user", "content": condensed(transcript)}]
-    text, _ = ask(RECIPE, messages, model=model)
+    text, _ = ask(system_prompt(), messages, model=model, on_chars=on_chars)
     for attempt in (1, 2):
         try:
             raw = extract_json(text)
@@ -55,7 +61,7 @@ def plan(transcript, model=None):
                 raise PlanError(f"Claude's plan couldn't be used twice in a row ({e}). Press Retry to ask again.")
             messages += [{"role": "assistant", "content": text},
                          {"role": "user", "content": f"That plan can't be used: {e} Return the corrected JSON only."}]
-            text, _ = ask(RECIPE, messages, model=model)
+            text, _ = ask(system_prompt(), messages, model=model)
 
 
 if __name__ == "__main__":

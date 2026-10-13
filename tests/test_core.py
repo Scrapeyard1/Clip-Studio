@@ -367,3 +367,134 @@ def test_edits_dont_jump_to_a_clip_between_far_apart_pieces(tmp_path):
     new = {"shorts": [{"id": "s1960", "pieces": [[1960, 2005]]},             # sits between the pieces
                       {"id": "s1279", "pieces": [[1279.0, 1283.0], [3497.0, 3553.0]]}]}
     assert pipeline.carry_edits(d, old, new) == {"s1276": "s1279"}
+
+
+# ---------- progress, pictures, chat editor ----------
+def test_program_output_reaches_the_progress_bar(tmp_path):
+    seen = []
+    media.run([sys.executable, "-c", "import sys\nfor i in (10, 50, 90): print(f'  {i}s / 100s  speed 9.0x', flush=True)"],
+              on_line=lambda l: seen.append(pipeline.transcriber_fraction(l)))
+    time.sleep(0.2)
+    assert seen == [0.1, 0.5, 0.9]
+    assert pipeline.transcriber_fraction("done 12 segments") is None
+
+
+def test_overall_bar_moves_through_stages():
+    got = []
+    rep = pipeline.Reporter(on_progress=got.append)
+    lo, hi = pipeline.ANALYZE_STAGES["transcript"]
+    rep.part(lo, hi)(0.5)
+    rep.part(lo, hi)(2)                       # never past the stage's end
+    assert got == [(lo + hi) // 2, hi]
+
+
+def test_time_left_estimate(app_client):
+    server, _ = app_client
+    assert server.time_left(1000, 2, now=1100) is None          # too early to say
+    assert server.time_left(1000, 25, now=1300) == 900          # 5 min for 25% -> 15 min left
+    assert server.time_left(1000, 100, now=1300) is None
+
+
+def test_pictures_of_a_new_recording(tmp_path):
+    src = make_video(str(tmp_path / "live.mp4"), 6)
+    poster, strip = pipeline.make_pictures(str(tmp_path), src)
+    from PIL import Image
+    assert Image.open(poster).width == 960
+    assert Image.open(strip).width == 8 * 240
+
+
+def test_upload_shows_a_picture_right_away(app_client, tmp_path):
+    server, client = app_client
+    v = make_video(str(tmp_path / "a.mp4"), 3)
+    pid = client.post("/api/projects/upload", files={"file": ("live.mp4", open(v, "rb"), "video/mp4")}).json()["id"]
+    assert client.get(f"/api/projects/{pid}").json()["pictures"]["poster"].startswith("work/poster.jpg")
+    r = client.get(f"/api/projects/{pid}/frame", params={"t": 1.5})
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+
+
+def test_rules_are_used_by_every_future_plan(tmp_path, monkeypatch):
+    import editor_rules
+    import moments
+    monkeypatch.setattr(paths, "PROJECTS", str(tmp_path))
+    r = editor_rules.add("Start shorts on the guest's question, not on Elijah's greeting.", "shorts", "Oct 1")
+    editor_rules.add("start shorts on the guest's question, not on elijah's greeting.", "shorts")     # duplicate
+    editor_rules.add("Never use the word DESTROYED in a title.", "titles")
+    assert len(editor_rules.all_rules()) == 2
+    assert "guest's question" in moments.system_prompt() and "DESTROYED" not in moments.system_prompt()
+    assert "DESTROYED" in editor_rules.prompt_block("titles")
+    assert editor_rules.delete(r["id"]) and "guest's question" not in moments.system_prompt()
+    with pytest.raises(ValueError):
+        editor_rules.add("   ")
+
+
+class _Block:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+    def model_dump(self, exclude_none=False):
+        return {k: v for k, v in self.__dict__.items() if not (exclude_none and v is None)}
+
+
+class _FakeClaude:
+    """Plays back scripted answers in place of the real API, and records what it was sent."""
+    def __init__(self, script):
+        self.script, self.sent = list(script), []
+        self.messages = self
+
+    def stream(self, **kw):
+        self.sent.append(kw)
+        msg = self.script.pop(0)
+
+        class Ctx:
+            def __enter__(s): return s
+            def __exit__(s, *a): return False
+            def get_final_message(s): return msg
+        return Ctx()
+
+
+def _msg(stop, *blocks):
+    return _Block(stop_reason=stop, content=list(blocks))
+
+
+def test_chat_editor_changes_a_clip_and_learns_the_reason(app_client, tmp_path, monkeypatch):
+    import editor_chat
+    import editor_rules
+    server, client = app_client
+    monkeypatch.setattr(paths, "PROJECTS", str(tmp_path))
+    pid, d = _project_with_plan(server, tmp_path)
+    fake = _FakeClaude([
+        _msg("tool_use", _Block(type="thinking", thinking="find the question", signature="sig"),
+             _Block(type="tool_use", id="t1", name="update_item", input={"id": "c100", "changes": {"start": 950}}),
+             _Block(type="tool_use", id="t2", name="update_item", input={"id": "c100", "changes": {"start": 130}}),
+             _Block(type="tool_use", id="t3", name="remember_rule",
+                    input={"rule": "Start conversations when the caller asks their first question.", "applies_to": "long_form"})),
+        _msg("end_turn", _Block(type="text", text="Moved the start to 2:10 and I'll remember that.", citations=None)),
+    ])
+    out = editor_chat.ask(d, "Test live", "Start at his question because that's the hook", server.chat_actions(pid),
+                          focus_id="c100", at=131.0, client=fake)
+    assert out["changed"] == ["c100"]
+    assert pipeline.edits(d)["items"]["c100"]["start"] == 130          # the valid change was saved
+    convo = fake.sent[1]["messages"]
+    tool_results = next(m["content"] for m in convo if m["role"] == "user" and isinstance(m["content"], list)
+                        and m["content"][0].get("type") == "tool_result")
+    assert tool_results[0]["is_error"] and "start before it ends" in tool_results[0]["content"]   # 950 > end
+    assert [r["text"] for r in editor_rules.all_rules()] == ["Start conversations when the caller asks their first question."]
+    assert any(a["kind"] == "rule" for a in out["actions"])
+    first = next(m for m in convo if m["role"] == "user")["content"][0]["text"]
+    assert "Preview player position: 2:11.0" in first and '"id": "c100"' in first
+    assert [m["role"] for m in editor_chat.history(d)] == ["user", "assistant"]
+    assert all("citations" not in b for m in convo if m["role"] == "assistant" for b in m["content"])   # no empty fields sent back
+
+
+def test_chat_needs_a_key_and_a_message(app_client, tmp_path, monkeypatch):
+    server, client = app_client
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    pid, _ = _project_with_plan(server, tmp_path)
+    assert client.post(f"/api/projects/{pid}/chat", json={"message": ""}).status_code == 400
+    r = client.post(f"/api/projects/{pid}/chat", json={"message": "hi"})
+    assert r.status_code == 400 and "API key" in r.json()["detail"]
+
+
+def test_render_bar_can_actually_hide():
+    css = open(os.path.join(ROOT, "app", "static", "index.html"), encoding="utf-8").read()
+    assert ".renderbar[hidden] { display: none; }" in css      # .renderbar's display:flex was beating [hidden]

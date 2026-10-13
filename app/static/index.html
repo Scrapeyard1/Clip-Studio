@@ -33,7 +33,12 @@ a { color: inherit; }
 .brand span { color: var(--gold); }
 .add { background: var(--gold); color: #1B1300; border: 0; border-radius: var(--radius-s); padding: 11px 12px; font-weight: 700; cursor: pointer; text-align: left; }
 .lives { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; overflow: auto; }
-.lives button { width: 100%; text-align: left; background: none; border: 0; border-radius: var(--radius-s); padding: 9px 10px; cursor: pointer; display: grid; gap: 1px; }
+.lives button { width: 100%; text-align: left; background: none; border: 0; border-radius: var(--radius-s); padding: 9px 10px; cursor: pointer; display: grid; grid-template-columns: 58px 1fr; gap: 10px; align-items: start; }
+.lives .pv { width: 58px; aspect-ratio: 16/9; object-fit: cover; border-radius: 4px; background: var(--deck-2); filter: grayscale(1) brightness(.8); }
+.lives .pv.ready { filter: none; }
+.lives .meta { display: grid; gap: 1px; min-width: 0; }
+.lives .mini { height: 3px; background: var(--rule); border-radius: 2px; overflow: hidden; margin-top: 5px; }
+.lives .mini i { display: block; height: 100%; background: var(--gold); }
 .lives button:hover { background: var(--deck); }
 .lives button[aria-current="true"] { background: var(--deck-2); box-shadow: inset 3px 0 0 var(--gold); }
 .lives .t { font-weight: 600; line-height: 1.25; }
@@ -50,7 +55,35 @@ main { padding: 34px 44px 140px; max-width: 1280px; width: 100%; }
 .status { margin: 18px 0 0; padding: 14px 16px; background: var(--deck); border-radius: var(--radius-m); }
 .status .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: space-between; }
 .bar { height: 6px; background: var(--rule); border-radius: 3px; overflow: hidden; margin-top: 10px; }
-.bar i { display: block; height: 100%; background: var(--gold); }
+.bar i { display: block; height: 100%; background: var(--gold); transition: width .6s ease; }
+.bar.wait i { width: 28%; animation: wait 1.3s ease-in-out infinite alternate; }
+@keyframes wait { from { margin-left: 0; } to { margin-left: 72%; } }
+.prog { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.prog .big { font: 400 40px/1 "Anton", sans-serif; color: var(--gold); font-variant-numeric: tabular-nums; }
+.prog .what { color: var(--paper); }
+.prog .left { color: var(--mist); }
+/* while a new live is being analyzed: a picture of it */
+.hero { position: relative; margin-top: 18px; border-radius: var(--radius-m); overflow: hidden; background: #000; }
+.hero > img { width: 100%; aspect-ratio: 16/7; object-fit: cover; display: block; filter: grayscale(1) contrast(1.05) brightness(.5); }
+.hero .over { position: absolute; left: 0; right: 0; bottom: 0; padding: 22px 22px 18px; background: linear-gradient(transparent, rgba(5,9,16,.94) 45%); }
+.hero .over .status { background: none; padding: 0; margin: 0; }
+.hero .tag { position: absolute; top: 14px; left: 14px; }
+.strip { width: 100%; display: block; border-radius: var(--radius-s); margin-top: 12px; filter: grayscale(1) brightness(.75); }
+/* previews of what isn't rendered yet: greyed, labelled "upcoming" */
+.upcoming { position: relative; border-radius: var(--radius-m); overflow: hidden; background: #000; border: 0; padding: 0; display: block; width: 100%; cursor: pointer; color: inherit; }
+.upcoming img, .upcoming video { display: block; width: 100%; height: 100%; object-fit: cover; filter: grayscale(1) contrast(1.08) brightness(.7); }
+.upcoming::after { content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgba(255,255,255,.035) 0 1px, transparent 1px 3px), radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,.6)); }
+.tag { position: absolute; z-index: 1; left: 10px; top: 10px; background: rgba(13,20,32,.85); color: var(--gold); border: 1px solid var(--gold);
+  font: 400 13px/1 "Anton", sans-serif; letter-spacing: 1.2px; padding: 5px 8px; border-radius: 4px; text-transform: uppercase; }
+.upcoming .play { position: absolute; inset: 0; display: grid; place-items: center; z-index: 1; }
+.upcoming .play span { width: 52px; height: 52px; border-radius: 50%; background: rgba(255,200,58,.92); color: #1B1300; display: grid; place-items: center; font-size: 19px; padding-left: 4px; }
+.upcoming:hover .play span { background: var(--gold); }
+.upcoming .cap { position: absolute; z-index: 1; left: 10px; right: 10px; bottom: 10px; font-size: 13px; text-shadow: 0 1px 3px #000; text-align: left; }
+.prep { display: grid; grid-template-columns: 300px 1fr; gap: 26px; margin-top: 18px; align-items: start; }
+.prep .upcoming { aspect-ratio: 16/9; }
+.prep .times { margin-top: 0; }
+.short-grid .upcoming { aspect-ratio: 9/16; }
 .steps { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 4px; color: var(--mist); font-size: 14px; }
 .steps li::before { content: "✓ "; color: var(--gold); }
 .steps li.now { color: var(--paper); }
@@ -145,6 +178,7 @@ select { background: var(--night); border: 1px solid var(--rule); border-radius:
 
 /* render bar */
 .renderbar { position: fixed; left: 248px; right: 0; bottom: 0; background: var(--deck); border-top: 1px solid var(--rule); padding: 12px 44px; display: flex; gap: 16px; align-items: center; justify-content: space-between; z-index: 5; }
+.renderbar[hidden] { display: none; }
 .renderbar .what { color: var(--mist); }
 .renderbar .what b { color: var(--paper); }
 
@@ -156,6 +190,37 @@ select { background: var(--night); border: 1px solid var(--rule); border-radius:
 .drawer .ctx p { margin: 0 0 4px; }
 .drawer .ctx p.in { color: var(--paper); }
 .drawer .ctx time { color: var(--gold); margin-right: 6px; font-variant-numeric: tabular-nums; }
+
+/* chat editor */
+.chat { position: fixed; top: 0; right: 0; bottom: 0; width: 400px; background: var(--deck); border-left: 1px solid var(--rule); z-index: 12; display: flex; flex-direction: column; }
+.chat[hidden] { display: none; }
+.chat .ch { display: flex; gap: 8px; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--rule); }
+.chat .ch strong { font: 400 22px/1 "Anton", sans-serif; letter-spacing: .3px; }
+.chat .msgs { flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.chat .m { max-width: 92%; padding: 9px 12px; border-radius: 10px; line-height: 1.45; white-space: pre-wrap; }
+.chat .m.user { align-self: flex-end; background: var(--deck-2); border: 1px solid var(--rule); }
+.chat .m.assistant { align-self: flex-start; background: var(--night); border: 1px solid var(--rule); }
+.chat .m.wait { color: var(--mist); }
+.chat .m .about { display: block; font-size: 12px; color: var(--mist); margin-bottom: 3px; }
+.chat .act { display: block; font-size: 13px; color: var(--ok); margin-top: 6px; white-space: normal; }
+.chat .act.rule { color: var(--gold); }
+.chat .empty-chat { color: var(--mist); font-size: 14px; }
+.chat .empty-chat li { margin: 6px 0; }
+.chat form { border-top: 1px solid var(--rule); padding: 12px 16px 16px; display: grid; gap: 8px; }
+.chat textarea { min-height: 72px; background: var(--night); }
+.chat .send { display: flex; gap: 10px; align-items: center; justify-content: space-between; }
+.chat .send small { color: var(--mist); font-size: 12px; line-height: 1.35; }
+.ctxline { display: flex; flex-wrap: wrap; gap: 6px; }
+.ctxline:empty { display: none; }
+.pill { font-size: 12px; border: 1px solid var(--rule); border-radius: 99px; padding: 2px 8px; color: var(--mist); display: inline-flex; gap: 6px; align-items: center; }
+.pill button { background: none; border: 0; color: var(--mist); cursor: pointer; padding: 0; font-size: 13px; }
+body.chat-open .app { margin-right: 400px; }
+body.chat-open .renderbar { right: 400px; }
+body.chat-open .drawer { right: 420px; }
+.rules-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.rules-list li { display: flex; gap: 10px; align-items: flex-start; background: var(--night); border: 1px solid var(--rule); border-radius: var(--radius-s); padding: 8px 10px; font-weight: 400; }
+.rules-list li span { flex: 1; }
+.rules-list small { display: block; }
 
 dialog { background: var(--deck); color: var(--paper); border: 1px solid var(--rule); border-radius: var(--radius-m); padding: 26px; width: min(560px, 92vw); }
 dialog::backdrop { background: rgba(5, 9, 16, .7); }
@@ -179,8 +244,11 @@ dialog::backdrop { background: rgba(5, 9, 16, .7); }
   .grid, .short-grid { grid-template-columns: 1fr; }
   .chapters { columns: 1; }
   .renderbar { left: 0; padding: 12px 16px; }
+  .prep { grid-template-columns: 1fr; }
+  .chat { width: 100%; }
+  body.chat-open .app { margin-right: 0; }
 }
-@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } .bar.wait i { animation: none; width: 100%; opacity: .4; } }
 </style>
 </head>
 <body>
@@ -188,6 +256,7 @@ dialog::backdrop { background: rgba(5, 9, 16, .7); }
   <nav class="rail" aria-label="Lives">
     <div class="brand">Clip<span>Studio</span></div>
     <button class="add" id="add">Add a recording</button>
+    <button class="btn" id="chat-open">Ask the editor</button>
     <ul class="lives" id="lives"></ul>
     <button class="btn" id="settings-btn" style="margin-top:auto">Settings</button>
   </nav>
@@ -195,9 +264,20 @@ dialog::backdrop { background: rgba(5, 9, 16, .7); }
 </div>
 <div class="renderbar" id="renderbar" hidden></div>
 
+<section class="chat" id="chat" hidden aria-label="Editor chat">
+  <div class="ch"><strong>Editor chat</strong><span style="flex:1"></span>
+    <button class="btn small" id="chat-clear">Clear</button><button class="btn small" id="chat-close">Close</button></div>
+  <div class="msgs" id="chat-msgs" aria-live="polite"></div>
+  <form id="chat-form">
+    <div class="ctxline" id="chat-ctx"></div>
+    <textarea id="chat-input" rows="3" placeholder="e.g. Start this short at his question, because the question is the hook."></textarea>
+    <div class="send"><small>Changes go through the same checks as your own edits. Reasons you give can be remembered for future lives.</small><button class="btn primary" id="chat-send">Send</button></div>
+  </form>
+</section>
+
 <section class="drawer" id="drawer" hidden aria-label="Preview">
   <div class="dh"><strong id="drawer-title">Preview</strong><button class="btn small" id="drawer-close">Close</button></div>
-  <video id="drawer-video" controls playsinline></video>
+  <div class="upcoming" style="cursor:default"><span class="tag">Preview</span><video id="drawer-video" controls playsinline></video></div>
   <div class="ctx" id="drawer-ctx"></div>
 </section>
 
@@ -237,6 +317,9 @@ dialog::backdrop { background: rgba(5, 9, 16, .7); }
       <input name="guest_audio_track" inputmode="numeric" placeholder="e.g. 2"></label>
     <label>OBS recordings folder <small>where your recordings are saved</small>
       <input name="recordings_folder" placeholder="D:\OBS"></label>
+    <div><div style="font-weight:600;margin-top:6px">What the editor has learned</div>
+      <small style="display:block;margin:2px 0 8px">Rules from your chat corrections. Every new live follows them.</small>
+      <ul class="rules-list" id="rules-list"></ul></div>
     <div class="err" id="serr" role="alert"></div>
     <div style="display:flex;gap:8px;justify-content:flex-end"><button type="button" class="btn" id="sclose">Close</button><button class="btn primary">Save settings</button></div>
   </form>
@@ -277,9 +360,14 @@ const STATE = { new: "waiting", queued: "waiting in line", running: "working", r
 
 async function loadLives(selectId) {
   const lives = await api("/api/projects");
-  $("#lives").innerHTML = lives.map(l => `<li><button data-id="${esc(l.id)}" aria-current="${l.id === (selectId || P?.id)}">
-      <span class="t">${esc(l.title)}</span><span class="s">${esc(l.date || "")}</span>
-      <span class="s">${esc(l.state === "running" && l.step ? l.step : STATE[l.state] || l.state)}</span></button></li>`).join("");
+  $("#lives").innerHTML = lives.map(l => {
+    const busy = l.state === "running" || l.state === "queued" || l.state === "new";
+    const pv = l.poster ? `<img class="pv ${busy ? "" : "ready"}" src="/media/${encodeURIComponent(l.id)}/work/poster.jpg" alt="">` : `<span class="pv"></span>`;
+    const st = l.state === "running" ? `${friendlyStep(l.step) || "Working"}${l.progress != null ? ` · ${l.progress}%` : ""}` : STATE[l.state] || l.state;
+    return `<li><button data-id="${esc(l.id)}" aria-current="${l.id === (selectId || P?.id)}">${pv}
+      <span class="meta"><span class="t">${esc(l.title)}</span><span class="s">${esc(l.date || "")}</span>
+      <span class="s">${esc(st)}</span>
+      ${l.state === "running" && l.progress != null ? `<span class="mini"><i style="width:${l.progress}%"></i></span>` : ""}</span></button></li>`; }).join("");
   $("#lives").onclick = e => { const b = e.target.closest("button"); if (b) open(b.dataset.id); };
   if (!lives.length) emptyState();
   else if (!selectId && !P) open(lives[0].id);
@@ -301,7 +389,9 @@ async function emptyState() {
 async function open(id, keepScroll) {
   clearTimeout(poll);
   const y = window.scrollY;
+  const switched = P?.id !== id;
   P = await api(`/api/projects/${encodeURIComponent(id)}`);
+  if (switched && !chatEl.hidden) { chatFocus = null; drawChat(); showChatCtx(); }
   $$(".lives button").forEach(b => b.setAttribute("aria-current", b.dataset.id === id));
   $("#main").innerHTML = (await healthBanner()) + head() + (P.items.length ? body() : "");
   wire();
@@ -316,10 +406,23 @@ async function refreshStatus() {
   const done = !["new", "queued", "running"].includes(fresh.status.state);
   if (done || (!P.items.length && fresh.items.length)) { loadLives(P.id); return open(P.id, true); }
   P.status = fresh.status; P.queue_position = fresh.queue_position;
+  if (!P.pictures?.strip && fresh.pictures?.strip) { P.pictures = fresh.pictures; return open(P.id, true); }
   $("#status").outerHTML = statusBox();
   wireStatus();
-  if (wasStep !== fresh.status.step) loadLives(P.id);
+  loadLives(P.id);
   poll = setTimeout(refreshStatus, 2500);
+}
+
+const STEP_WORDS = { "Extract audio": "Pulling out the audio", "Transcribe": "Transcribing every word",
+  "Measure quiet stretches": "Finding the quiet stretches", "Find conversations and shorts": "Claude is finding conversations and shorts",
+  "Get the video from YouTube": "Downloading from YouTube" };
+function friendlyStep(s) { return s ? (STEP_WORDS[s] || s) : ""; }
+function timeLeft(sec) {
+  if (sec == null) return "";
+  if (sec < 60) return "less than a minute left";
+  const m = Math.round(sec / 60);
+  if (m < 90) return `about ${m} min left`;
+  return `about ${Math.floor(m / 60)} h ${m % 60} min left`;
 }
 
 function statusBox() {
@@ -327,22 +430,32 @@ function statusBox() {
   let line = "", actions = "";
   if (st.state === "queued" || st.state === "new")
     line = P.queue_position > 1 ? `Waiting in line: ${P.queue_position - 1} job${P.queue_position > 2 ? "s" : ""} ahead.` : "Starting…";
-  else if (st.state === "running") line = st.job === "render" ? "Rendering what you selected. You can keep reviewing." : "Analyzing the recording. You can close this window; it keeps going.";
+  else if (st.state === "running") {
+    const what = friendlyStep(st.step) || (st.job === "render" ? "Rendering" : "Getting started");
+    const left = timeLeft(st.eta) || (st.progress > 0 ? "working out the time left…" : "");
+    line = `<div class="prog">${st.progress != null ? `<span class="big">${st.progress}%</span>` : ""}<span class="what">${esc(what)}</span>${left ? `<span class="left">· ${left}</span>` : ""}</div>
+      <small style="color:var(--mist)">${st.job === "render" ? "You can keep reviewing while it renders." : "You can close this window; it keeps going."}</small>`;
+  }
   else if (st.state === "error") line = `<span class="err">${esc(st.error)}</span>`;
   else if (st.state === "cancelled") line = esc(st.note || "Stopped.");
   else return `<div id="status"></div>`;
   if (["queued", "running", "new"].includes(st.state)) actions = `<button class="btn small" id="cancel">${st.state === "running" ? "Stop" : "Remove from line"}</button>`;
   if (["error", "cancelled"].includes(st.state)) actions = `<button class="btn primary small" id="retry">Retry</button>`;
-  const pct = st.progress != null && st.state === "running" ? `<div class="bar"><i style="width:${st.progress}%"></i></div>` : "";
+  const pct = st.state === "running" ? (st.progress != null ? `<div class="bar"><i style="width:${st.progress}%"></i></div>` : `<div class="bar wait"><i></i></div>`) : "";
   return `<div class="status" id="status" role="status"><div class="row"><div>${line}${st.note && st.state === "queued" ? ` <small style="color:var(--mist)">${esc(st.note)}</small>` : ""}</div>${actions}</div>${pct}
     ${steps.length ? `<ul class="steps">${steps.map((s, i) => `<li class="${i === steps.length - 1 && st.state === "running" ? "now" : ""}">${esc(s)}</li>`).join("")}</ul>` : ""}</div>`;
 }
 
 function head() {
   const n = P.items.filter(i => i.kind === "long").length, s = P.items.filter(i => i.kind === "short").length;
+  const pics = P.pictures || {}, m = f => `/media/${encodeURIComponent(P.id)}/${f}`;
+  const hero = !P.items.length && pics.poster
+    ? `<div class="hero"><img src="${m(pics.poster)}" alt="A frame from the recording"><span class="tag">Upcoming</span>
+        <div class="over">${statusBox()}${pics.strip ? `<img class="strip" src="${m(pics.strip)}" alt="Moments across the recording">` : ""}</div></div>`
+    : statusBox();
   return `<div class="head"><h1>${esc(P.title)}</h1>
     <p>${esc(P.date || "")}${P.duration ? `, ${short(P.duration)} live` : ""}${P.items.length ? `. ${n} conversation${n === 1 ? "" : "s"} and ${s} short${s === 1 ? "" : "s"} proposed.` : ""}</p>
-    ${statusBox()}
+    ${hero}
     ${P.problems?.length ? `<details class="problems"><summary>${P.problems.length} thing${P.problems.length === 1 ? "" : "s"} in Claude's plan need a look</summary><ul>${P.problems.map(p => `<li>${esc(p)}</li>`).join("")}</ul></details>` : ""}</div>`;
 }
 
@@ -374,6 +487,14 @@ function liveMap(longs) {
       return `<button class="seg ${c.selected ? "sel" : ""} ${c.render === "done" ? "done" : ""} ${w < 7 ? "narrow" : ""}" style="left:${pct(c.start)};width:${w.toFixed(3)}%"
         title="${esc(c.guest)}: ${esc(c.topic)} (${short(c.start)} to ${short(c.end)})" data-go="${esc(c.id)}">${notches}
         <div class="g">${esc(c.guest)}</div><div class="tp">${esc(c.topic)}</div></button>`; }).join("")}</div></section>`;
+}
+
+/* a greyed still of the source with an "Upcoming" tag: what this will be, before it's rendered */
+function upcomingTile(t, a, b, label, caption) {
+  const src = `/api/projects/${encodeURIComponent(P.id)}/frame?t=${(+t).toFixed(1)}&w=640`;
+  return `<button class="upcoming" data-hear="${a}|${b}" aria-label="Preview ${esc(label)}">
+    <img src="${src}" alt="" loading="lazy"><span class="tag">Upcoming</span>
+    <span class="play"><span>▶</span></span><span class="cap">${esc(caption)}</span></button>`;
 }
 
 const RENDER_LABEL = { done: "Rendered", stale: "Changed since render", missing: "Not rendered" };
@@ -438,10 +559,12 @@ function longCard(c) {
       <label class="include"><input type="checkbox" data-select ${c.selected ? "checked" : ""}> Render</label>
       <div class="name"><input class="guest" value="${esc(c.guest)}" aria-label="Guest name" data-text="guest">
         <input class="topic" value="${esc(c.topic)}" aria-label="Topic" data-text="topic"></div>
-      <div class="chips">${c.rank ? `<span class="chip rank">${esc(c.rank.toLowerCase())}</span>` : ""}${stateChip(c)}</div>
+      <div class="chips">${c.rank ? `<span class="chip rank">${esc(c.rank.toLowerCase())}</span>` : ""}${stateChip(c)}<button class="btn small" data-chat>Tell the editor</button></div>
     </div>
     ${c.problems.length ? `<ul class="problems-list">${c.problems.map(p => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
     ${c.render === "stale" && files.video ? `<p class="stale-note">You changed this after it was rendered. Render it again to update the video, captions and editor timeline.</p>` : ""}
+    ${files.video ? "" : `<div class="prep">${(() => { const k = (c.cold_open || [])[0] || [c.start, c.start + 20];
+        return upcomingTile(k[0] + 0.5, k[0], k[1], c.guest, "Not rendered yet · plays the first cold-open clip"); })()}`}
     <div class="times">
       <div><div class="lab">Conversation <small>${short(c.end - c.start)} long</small></div>
         <div class="clip-row" data-field="span"><input class="tin" data-part="0" value="${fmt(c.start)}" aria-label="Starts"> to
@@ -451,7 +574,7 @@ function longCard(c) {
       <div><div class="lab">Cold open <small>${coldLen.toFixed(0)} s, aim for about 30</small></div>
         ${clipRows(c.cold_open || [], "cold_open")}
         <button class="btn small" data-add="cold_open">Add a clip</button></div>
-    </div>
+    </div>${files.video ? "" : "</div>"}
     ${rendered}</article>`;
 }
 
@@ -466,12 +589,14 @@ function shortCard(s) {
       <label class="include"><input type="checkbox" data-select ${s.selected ? "checked" : ""}> Render</label>
       <div class="name"><input class="guest" value="${esc(s.hook)}" aria-label="Hook text" data-text="hook">
         <div style="color:var(--mist);font-size:14px">${esc(s.why || "")}</div></div>
-      <div class="chips">${stateChip(s)}</div>
+      <div class="chips">${stateChip(s)}<button class="btn small" data-chat>Tell the editor</button></div>
     </div>
     ${s.problems.length ? `<ul class="problems-list">${s.problems.map(p => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
     ${(s.issues || []).length ? `<ul class="problems-list" style="color:var(--gold)">${s.issues.map(p => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
     <div class="short-grid">
-      ${files.video ? `<video controls preload="metadata" src="${m(files.video)}"></video>` : `<div class="vert-ph">Not rendered yet</div>`}
+      ${files.video ? `<video controls preload="metadata" src="${m(files.video)}"></video>`
+        : (s.pieces || []).length ? upcomingTile(s.pieces[0][0] + 0.5, s.pieces[0][0], s.pieces[0][1], s.hook, "Not rendered yet")
+        : `<div class="vert-ph">No clips yet</div>`}
       <div>
         <div class="field"><div class="lab">Clips, played in order <small>${len.toFixed(0)} s before pauses are tightened</small></div>
           ${clipRows(s.pieces || [], "pieces")}<button class="btn small" data-add="pieces">Add a clip</button></div>
@@ -616,12 +741,14 @@ function wireCard(card) {
     cp.textContent = "Copied"; setTimeout(() => cp.textContent = "Copy description and chapters", 1600);
   };
   const ap = $("[data-approve]", card); if (ap) ap.onclick = () => patch(id, { approved: !item().approved });
+  const ch = $("[data-chat]", card); if (ch) ch.onclick = () => openChat(id);
 }
 
 /* preview drawer: the moment plus context, with the words around it */
 async function hear(a, b, label) {
   const s = Math.max(0, a - CONTEXT), e = b + CONTEXT;
   const d = $("#drawer"), v = $("#drawer-video");
+  playerStart = s; showChatCtx();
   $("#drawer-title").textContent = `${label ? label + ": " : ""}${fmt(a)} to ${fmt(b)}`;
   d.hidden = false;
   v.src = `/api/projects/${encodeURIComponent(P.id)}/preview?start=${s.toFixed(2)}&end=${e.toFixed(2)}`;
@@ -630,27 +757,48 @@ async function hear(a, b, label) {
   $("#drawer-ctx").innerHTML = lines.map(l => `<p class="${l.end > a && l.start < b ? "in" : ""}"><time>${fmt(l.start)}</time>${esc(l.text)}</p>`).join("")
     + `<p style="margin-top:6px">Plays ${CONTEXT} seconds before and after. Brighter lines are inside the clip.</p>`;
 }
-$("#drawer-close").onclick = () => { const v = $("#drawer-video"); v.pause(); v.removeAttribute("src"); v.load(); $("#drawer").hidden = true; };
+$("#drawer-close").onclick = () => { const v = $("#drawer-video"); v.pause(); v.removeAttribute("src"); v.load(); $("#drawer").hidden = true; playerStart = null; showChatCtx(); };
+$("#drawer-video").ontimeupdate = () => showChatCtx();
 
 /* add a recording */
 const dlg = $("#dlg"), drop = $("#drop"), err = $("#err");
 $("#add").onclick = () => { err.textContent = ""; dlg.showModal(); };
 $("#close").onclick = () => dlg.close();
-drop.onclick = () => $("#file").click();
-drop.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("#file").click(); } };
+drop.onclick = () => $("#file")?.click();
+drop.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("#file")?.click(); } };
 ["dragenter", "dragover"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add("over"); }));
 ["dragleave", "drop"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove("over"); }));
 drop.addEventListener("drop", e => e.dataTransfer.files[0] && upload(e.dataTransfer.files[0]));
 $("#file").onchange = e => e.target.files[0] && upload(e.target.files[0]);
 async function added(p) { dlg.close(); await loadLives(p.id); open(p.id); }
-async function upload(f) {
+const gb = n => n >= 1e9 ? (n / 1e9).toFixed(2) + " GB" : Math.round(n / 1e6) + " MB";
+function upload(f) {
   err.textContent = "";
   const fd = new FormData(); fd.append("file", f);
-  drop.textContent = `Copying ${f.name}…`;
-  try { added(await api("/api/projects/upload", { method: "POST", body: fd })); }
-  catch (e) { err.textContent = e.message; }
-  finally { drop.textContent = "Drop the video here, or click to choose it"; }
+  const xhr = new XMLHttpRequest(), t0 = Date.now();
+  const reset = () => { drop.innerHTML = `Drop the video here, or click to choose it
+    <input type="file" id="file" accept=".mp4,.mov,.mkv,.m4v,.webm" hidden>`; $("#file").onchange = pick; };
+  const show = (pct, sub) => { drop.innerHTML = `<div class="prog" style="justify-content:center"><span class="big">${pct}%</span>
+      <span class="what">Adding ${esc(f.name)}</span></div><div class="bar"><i style="width:${pct}%"></i></div>
+      <small style="display:block;margin-top:8px">${sub}</small>`; };
+  show(0, `0 MB of ${gb(f.size)}`);
+  xhr.upload.onprogress = e => {
+    if (!e.lengthComputable) return;
+    const frac = e.loaded / e.total, el = (Date.now() - t0) / 1000;
+    const left = frac > 0.02 && el > 2 ? timeLeft(el * (1 - frac) / frac) : "";
+    show(Math.floor(frac * 100), `${gb(e.loaded)} of ${gb(e.total)}${left ? " · " + left : ""}`);
+  };
+  xhr.upload.onload = () => show(100, "Saving it and taking a first look…");
+  xhr.onload = () => {
+    let body = {}; try { body = JSON.parse(xhr.responseText || "{}"); } catch (_) {}
+    reset();
+    if (xhr.status < 300) added(body); else err.textContent = body.detail || `Upload failed (${xhr.status})`;
+  };
+  xhr.onerror = () => { reset(); err.textContent = "The upload stopped. Check the app is still running and try again."; };
+  xhr.open("POST", "/api/projects/upload");
+  xhr.send(fd);
 }
+const pick = e => e.target.files[0] && upload(e.target.files[0]);
 $("#pathform").onsubmit = async e => { e.preventDefault(); err.textContent = "";
   try { added(await api("/api/projects/from-path", jsonOpts("POST", { path: $("#path").value }))); } catch (x) { err.textContent = x.message; } };
 $("#linkform").onsubmit = async e => { e.preventDefault(); err.textContent = "";
@@ -661,13 +809,78 @@ const sdlg = $("#sdlg");
 $("#settings-btn").onclick = async () => {
   const cur = await api("/api/settings"); $("#serr").textContent = "";
   for (const [k, v] of Object.entries(cur)) { const i = $(`#sform [name=${k}]`); if (i) i.value = v; }
+  showRules(await api("/api/rules"));
   sdlg.showModal();
 };
+const SCOPE = { shorts: "Shorts", long_form: "Long-form", both: "All clips", titles: "Titles" };
+function showRules(rules) {
+  $("#rules-list").innerHTML = rules.length ? rules.map(r => `<li><span>${esc(r.text)}<small style="color:var(--mist)">${SCOPE[r.applies_to] || ""} · learned ${esc(r.created)}${r.source ? ` from “${esc(r.source)}”` : ""}</small></span>
+      <button type="button" class="btn small" data-forget="${esc(r.id)}">Forget</button></li>`).join("")
+    : `<li><span style="color:var(--mist)">Nothing yet. Tell the editor why you changed a clip and it learns from it.</span></li>`;
+  $$("[data-forget]", $("#rules-list")).forEach(b => b.onclick = async () => showRules(await api(`/api/rules/${b.dataset.forget}`, { method: "DELETE" })));
+}
 $("#sclose").onclick = () => sdlg.close();
 $("#sform").onsubmit = async e => {
   e.preventDefault();
   try { await api("/api/settings", jsonOpts("PUT", Object.fromEntries(new FormData(e.target)))); sdlg.close(); if (P) open(P.id, true); else emptyState(); }
   catch (x) { $("#serr").textContent = x.message; }
+};
+
+/* chat editor */
+let chatFocus = null, playerStart = null, chatBusy = false;
+const chatEl = $("#chat");
+function playerAt() {
+  const v = $("#drawer-video");
+  return playerStart != null && !$("#drawer").hidden ? playerStart + (v.currentTime || 0) : null;
+}
+function showChatCtx() {
+  if (chatEl.hidden) return;
+  const it = chatFocus && P ? P.items.find(i => i.id === chatFocus) : null, at = playerAt();
+  $("#chat-ctx").innerHTML = (it ? `<span class="pill">About: ${esc(it.guest || it.hook)} <button type="button" id="chat-unfocus" aria-label="Talk about the whole live">✕</button></span>` : "")
+    + (at != null ? `<span class="pill">Player at ${fmt(at)}: say “here” to use this spot</span>` : "");
+  const u = $("#chat-unfocus"); if (u) u.onclick = () => { chatFocus = null; showChatCtx(); };
+}
+function chatMsg(m) {
+  const acts = (m.actions || []).map(a => `<span class="act ${a.kind === "rule" ? "rule" : ""}">${a.kind === "rule" ? "★" : "✓"} ${esc(a.text)}</span>`).join("");
+  const about = m.role === "user" && m.focus && P ? P.items.find(i => i.id === m.focus) : null;
+  return `<div class="m ${m.role}">${about ? `<span class="about">About ${esc(about.guest || about.hook)}</span>` : ""}${esc(m.text)}${acts}</div>`;
+}
+async function drawChat() {
+  if (!P) { $("#chat-msgs").innerHTML = `<p class="empty-chat">Add a live first, then tell the editor what to change.</p>`; return; }
+  const msgs = await api(`/api/projects/${encodeURIComponent(P.id)}/chat`);
+  $("#chat-msgs").innerHTML = msgs.length ? msgs.map(chatMsg).join("") : `<div class="empty-chat"><p>Tell the editor what to change, in your own words. For example:</p><ul>
+    <li>“This short starts too early. Start it at his question, because the question is the hook.”</li>
+    <li>“End the David conversation right after he hangs up.”</li>
+    <li>“Never put the like-the-live ask in a short.”</li></ul>
+    <p>When you give a reason, it remembers it for future lives. You can see and remove what it learned in Settings.</p></div>`;
+  $("#chat-msgs").scrollTop = 1e9;
+}
+function openChat(focusId) {
+  chatFocus = focusId || chatFocus;
+  chatEl.hidden = false; document.body.classList.add("chat-open");
+  showChatCtx(); drawChat(); $("#chat-input").focus();
+}
+$("#chat-open").onclick = () => openChat(null);
+$("#chat-close").onclick = () => { chatEl.hidden = true; document.body.classList.remove("chat-open"); };
+$("#chat-clear").onclick = async () => { if (P) { await api(`/api/projects/${encodeURIComponent(P.id)}/chat/clear`, { method: "POST" }); drawChat(); } };
+$("#chat-input").onkeydown = e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#chat-form").requestSubmit(); } };
+$("#chat-form").onsubmit = async e => {
+  e.preventDefault();
+  const box = $("#chat-input"), text = box.value.trim();
+  if (!text || !P || chatBusy) return;
+  chatBusy = true; $("#chat-send").disabled = true; box.value = "";
+  const list = $("#chat-msgs");
+  if (list.querySelector(".empty-chat")) list.innerHTML = "";
+  list.insertAdjacentHTML("beforeend", chatMsg({ role: "user", text, focus: chatFocus }) + `<div class="m assistant wait" id="chat-wait">Working on it…</div>`);
+  list.scrollTop = 1e9;
+  try {
+    const r = await api(`/api/projects/${encodeURIComponent(P.id)}/chat`, jsonOpts("POST", { message: text, item_id: chatFocus, at: playerAt() }));
+    $("#chat-wait").outerHTML = chatMsg(r);
+    if (r.changed?.length) await open(P.id, true);
+  } catch (x) {
+    $("#chat-wait").outerHTML = `<div class="m assistant"><span class="err">${esc(x.message)}</span></div>`;
+    box.value = text;
+  } finally { chatBusy = false; $("#chat-send").disabled = false; list.scrollTop = 1e9; showChatCtx(); }
 };
 
 loadLives();

@@ -19,6 +19,7 @@ Command line:  python clipstudio.py analyze <project dir>
                python clipstudio.py render  <project dir> [item ids...]
 """
 import hashlib
+import re
 import json
 import os
 import sys
@@ -52,6 +53,36 @@ class Reporter:
     def check(self):
         if self.cancel is not None and self.cancel.is_set():
             raise media.Cancelled()
+
+    def part(self, lo, hi):
+        """A slice of the overall bar: part(6, 88)(0.5) reports 47%."""
+        return lambda frac: self.progress(int(lo + (hi - lo) * max(0.0, min(1.0, frac))))
+
+
+# Share of the analysis bar for each stage (transcription is most of the wait).
+ANALYZE_STAGES = {"pictures": (0, 1), "audio": (1, 6), "transcript": (6, 88), "quiet": (88, 90), "plan": (90, 100)}
+
+
+def transcriber_fraction(line):
+    """The transcriber prints '  1234s / 9711s  speed 10.0x'. Returns 0.127 for that, or None."""
+    m = re.match(r"\s*(\d+)s\s*/\s*(\d+)s", line or "")
+    if not m or int(m.group(2)) <= 0:
+        return None
+    return min(1.0, int(m.group(1)) / int(m.group(2)))
+
+
+def make_pictures(d, source):
+    """A poster frame and a filmstrip of the recording, so there's something to see while it's analyzed."""
+    w = os.path.join(d, "work")
+    os.makedirs(w, exist_ok=True)
+    dur = media.probe(source)["duration"] or 60
+    poster = os.path.join(w, "poster.jpg")
+    if not media.valid_output(poster):
+        media.frame(source, min(dur * 0.1, 600), poster, 960)
+    strip = os.path.join(w, "strip.jpg")
+    if not media.valid_output(strip):
+        media.filmstrip(source, dur, strip)
+    return poster, strip
 
 
 # ---------------- project files ----------------
@@ -177,26 +208,45 @@ def analyze(d, source, rep=None, threads=None):
     os.makedirs(w, exist_ok=True)
     wav, tr, qj, pj = (os.path.join(w, x) for x in ("audio16k.wav", "transcript.json", "quiet.json", "plan.json"))
 
+    S = ANALYZE_STAGES
+    try:
+        make_pictures(d, source)
+    except Exception:
+        pass                                   # pictures are nice to have, never a reason to stop
+    rep.part(*S["pictures"])(1)
+
     def extract():
+        dur = media.probe(source)["duration"] or 1
+        media.progress.done, media.progress.fn = 0.0, lambda sec: rep.part(*S["audio"])(sec / dur)
         tmp = media.tmp_name(wav)
         media.run([paths.ffmpeg(), "-v", "error", "-y", "-i", source, "-map", "0:a:0", "-vn", "-ac", "1",
                    "-ar", "16000", "-c:a", "pcm_s16le", tmp])
+        media.progress.fn = None
         media.commit(tmp, wav)
     run_step(d, "audio", "Extract audio", [wav], extract, rep, inputs=[source, os.path.getsize(source)])
+    rep.part(*S["audio"])(1)
 
+    def on_line(line):
+        f = transcriber_fraction(line)
+        if f is not None:
+            rep.part(*S["transcript"])(f)
     run_step(d, "transcript", "Transcribe", [tr], lambda: media.run(
-        [sys.executable, os.path.join(ENGINE, "transcribe.py"), wav, tr, "--threads", str(threads or os.cpu_count())]),
-        rep, inputs=[os.path.getsize(wav)])
+        [sys.executable, os.path.join(ENGINE, "transcribe.py"), wav, tr, "--threads", str(threads or os.cpu_count())],
+        on_line=on_line), rep, inputs=[os.path.getsize(wav)])
+    rep.part(*S["transcript"])(1)
 
     def quiet():
         from cuts import detect_quiet
         media.write_json(qj, detect_quiet(wav))
     run_step(d, "quiet", "Measure quiet stretches", [qj], quiet, rep, inputs=[os.path.getsize(wav)])
+    rep.part(*S["quiet"])(1)
 
     def plan():
         from moments import plan as claude_plan
         previous = load(w, "plan.json") or load(w, "plan.previous.json")
-        clean, problems = claude_plan(corrected_transcript(d))
+        # Claude's answer is usually 20-40k characters including its thinking: move the bar as it streams
+        clean, problems = claude_plan(corrected_transcript(d),
+                                      on_chars=lambda n: rep.part(*S["plan"])(min(0.95, n / 35000)))
         moved = carry_edits(d, previous, clean)
         clean["problems"] = problems + [f"Your edits on {a} moved to {b}, the same stretch in the new plan."
                                         for a, b in moved.items()]

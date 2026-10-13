@@ -20,15 +20,19 @@ cancel_event = threading.local()
 progress = threading.local()   # progress.fn(seconds): media seconds written so far in the current step
 
 
-def run(cmd, timeout=None):
+def run(cmd, timeout=None, on_line=None):
     """Run a command, killing it promptly if the current job is cancelled. Raises with FFmpeg's error.
-    FFmpeg commands also report how far they've got to progress.fn, if one is set."""
+    FFmpeg commands also report how far they've got to progress.fn, if one is set. Other programs can
+    report through their output: on_line(text) gets each line they print."""
     ev = getattr(cancel_event, "ev", None)
     fn = getattr(progress, "fn", None)
     is_ffmpeg = os.path.basename(cmd[0]).lower().startswith("ffmpeg")
     if fn and is_ffmpeg:
         cmd = [cmd[0], "-progress", "pipe:1", "-nostats", *cmd[1:]]
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE if fn and is_ffmpeg else subprocess.DEVNULL,
+    else:
+        fn = None
+    piped = bool(fn or on_line)
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE if piped else subprocess.DEVNULL,
                          stderr=subprocess.PIPE, text=True)
     err, base, last = [], getattr(progress, "done", 0.0), [0.0]
     t = threading.Thread(target=lambda: err.append(p.stderr.read()), daemon=True)
@@ -36,6 +40,12 @@ def run(cmd, timeout=None):
 
     def read_progress():
         for line in p.stdout:
+            if on_line:
+                try:
+                    on_line(line.rstrip("\n"))
+                except Exception:
+                    pass
+                continue
             if line.startswith("out_time_us=") and line.strip()[12:].isdigit():
                 last[0] = int(line.strip()[12:]) / 1e6
                 try:
@@ -163,3 +173,38 @@ def load_json(path, default=None):
             return json.load(f)
     except (OSError, ValueError):
         return {} if default is None else default
+
+
+def frame(src, t, out, width=640):
+    """One still of the recording at t seconds, as a JPEG (fast: seeks before decoding)."""
+    tmp = tmp_name(out)
+    run([paths.ffmpeg(), "-v", "error", "-y", "-ss", f"{max(0.0, t):.3f}", "-i", src, "-frames:v", "1",
+         "-vf", f"scale={width}:-2", "-q:v", "4", tmp])
+    commit(tmp, out)
+    return out
+
+
+def filmstrip(src, duration, out, count=8, width=240):
+    """`count` stills spread across the recording, side by side in one JPEG."""
+    from PIL import Image
+    import tempfile
+    tiles = []
+    with tempfile.TemporaryDirectory() as td:
+        for k in range(count):
+            t = duration * (k + 0.5) / count
+            f = os.path.join(td, f"{k}.jpg")
+            try:
+                frame(src, t, f, width)
+                tiles.append(Image.open(f).convert("RGB"))
+            except Exception:
+                continue
+        if not tiles:
+            raise RuntimeError("Couldn't read any pictures from the recording.")
+        h = tiles[0].height
+        strip = Image.new("RGB", (width * len(tiles), h))
+        for k, im in enumerate(tiles):
+            strip.paste(im.resize((width, h)), (k * width, 0))
+        tmp = tmp_name(out)
+        strip.save(tmp, "JPEG", quality=82)
+    commit(tmp, out)
+    return out

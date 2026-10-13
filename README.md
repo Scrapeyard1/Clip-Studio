@@ -55,6 +55,23 @@ with the exact fix.
    Exports: **Resolve / Premiere** (`.xml`; Resolve: File > Import > Timeline, Premiere: File > Import),
    the video, and `.srt` captions (CapCut: import the video, then the captions).
 
+## The chat editor
+
+"Ask the editor" (left rail) or "Tell the editor" on any clip opens a chat. Say what to change in your
+own words: "This short starts too late, start it on my question, because the question is the setup."
+It reads the transcript, moves the cut to the nearest line boundary, and makes the change through the
+same checks as a manual edit. If the preview player is open, "here" means where it's paused.
+When you give a reason that applies beyond this clip, it saves it as a rule, and every future plan and
+title follows it. Settings lists everything it has learned, with Forget buttons.
+Rules live in `projects/_style/rules.json`; chats in each project's `chat.json`.
+
+## Progress and previews
+
+Uploads show a percentage, size and time left. Right after a recording is added you get a picture of
+it and a filmstrip across the whole live, with an overall percentage and time left while it's analyzed
+(transcription is most of the bar). Anything not rendered yet is shown greyed with an "Upcoming" tag;
+click it to hear that moment. Finished renders play in full color.
+
 ## Your edits are kept separate
 
 Everything you change in Review is saved in `edits.json` in the project, apart from Claude's output.

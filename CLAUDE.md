@@ -47,6 +47,10 @@ Done and tested on Linux (not yet on a Mac or Windows; first Mac run is the next
 - Shorts render piece by piece (flat memory; the old one-pass render was OOM-killed at 6 GB).
 - Claude calls go through engine/claude_api.py: streaming, adaptive thinking, effort "medium".
   Sonnet 5.5 thinks by default; a low max_tokens returns NO text. Keep that helper.
+- Branch review-upgrades (not merged yet): chat editor (engine/editor_chat.py, tool loop in
+  claude_api.converse) that edits clips via server.apply_edit and saves rules (engine/editor_rules.py,
+  injected into planner + titles prompts); upload % and analysis % with time left; poster + filmstrip
+  on upload; greyed "Upcoming" previews for unrendered items.
 - First real run on the Oct 1 live ("What is ILLOGICAL about the Trinity?", 2:41:51) found 11
   conversations and 8 shorts; titles/description/chapters generated for "Black on YT".
 

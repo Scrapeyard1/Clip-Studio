@@ -72,7 +72,8 @@ def clean_chapters(chapters, timeline):
 def write(transcript, item, timeline, model=None):
     from claude_api import ask, extract_json
     text = final_timeline_transcript(transcript, timeline)
-    out, _ = ask(STYLE, [{"role": "user", "content": f"Guest: {item.get('guest', 'caller')}\n"
+    import editor_rules
+    out, _ = ask(STYLE + editor_rules.prompt_block("titles"), [{"role": "user", "content": f"Guest: {item.get('guest', 'caller')}\n"
                           f"The video is {chapter_stamp(timeline.seconds)} long; the cold open runs until "
                           f"{chapter_stamp(timeline.body_start())}.\n\n{text}"}], max_tokens=16000, model=model)
     data = extract_json(out)
