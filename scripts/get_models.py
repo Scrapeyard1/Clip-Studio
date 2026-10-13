@@ -1,4 +1,5 @@
-"""Download what Clip Studio needs (one time, ~830 MB), then run the setup check.
+"""Download what Clip Studio needs (one time, ~1.2 GB), then run the setup check.
+Add --no-photo-models to skip the caller-photo enhancers (~410 MB).
 
 Models go to the folder in engine/paths.py: <repo>/models, or CLIPSTUDIO_MODELS if you set it.
 Fonts ship in assets/fonts; any that are missing are fetched from Google Fonts' GitHub.
@@ -19,6 +20,11 @@ MODELS = [
     (paths.YUNET, "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/"
                   "face_detection_yunet/face_detection_yunet_2023mar.onnx"),
     (paths.U2NET, "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2net_human_seg.onnx"),
+]
+FACEFUSION = "https://github.com/facefusion/facefusion-assets/releases/download/models-3.0.0/"
+OPTIONAL = [   # caller-photo enhancement (~410 MB); photos are resized and sharpened without them
+    (paths.ESRGAN, FACEFUSION + "real_esrgan_x4.onnx"),
+    (paths.GFPGAN, FACEFUSION + "gfpgan_1.4.onnx"),
 ]
 PARAKEET = RELEASE + "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2"
 FONT_URLS = {
@@ -53,6 +59,10 @@ def main():
         with tarfile.open(archive) as t:
             t.extractall(paths.MODELS)
         os.remove(archive)
+    if "--no-photo-models" not in sys.argv:
+        for dest, url in OPTIONAL:
+            if not os.path.isfile(dest):
+                fetch(url, dest)
     for name, url in FONT_URLS.items():
         dest = os.path.join(paths.FONTS, name)
         if not os.path.isfile(dest):

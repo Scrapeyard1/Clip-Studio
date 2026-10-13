@@ -103,6 +103,12 @@ h2 { font: 400 30px/1 "Anton", sans-serif; margin: 0 0 6px; letter-spacing: .3px
 .btn { background: var(--deck-2); border: 1px solid var(--rule); border-radius: var(--radius-s); padding: 7px 12px; cursor: pointer; text-decoration: none; font-weight: 600; font-size: 14px; display: inline-block; }
 .btn:hover { border-color: var(--mist); }
 .btn.small { padding: 4px 9px; font-size: 13px; }
+.caller { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; background: var(--deck-2); border: 1px solid var(--rule); border-radius: var(--radius-m); padding: 12px 14px; }
+.caller .ph { width: 76px; height: 76px; border-radius: 50%; border: 3px solid var(--gold); object-fit: cover; background: var(--night); display: grid; place-items: center; font: 28px Anton, sans-serif; color: var(--gold); flex: none; }
+.caller .who { display: grid; gap: 6px; flex: 1; min-width: 180px; }
+.caller input[type=text] { width: 100%; background: var(--night); border: 1px solid var(--rule); border-radius: var(--radius-s); padding: 7px 10px; }
+.caller input[type=text]:focus { border-color: var(--gold); outline: none; }
+.caller small { color: var(--mist); }
 .btn.primary { background: var(--gold); color: #1B1300; border-color: var(--gold); }
 .btn[aria-pressed="true"] { background: #23401F; border-color: var(--ok); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
@@ -227,6 +233,8 @@ dialog::backdrop { background: rgba(5, 9, 16, .7); }
       <input name="outro" placeholder="D:\Channel\patreon-outro.mp4"></label>
     <label>Photos of Elijah for thumbnails <small>a folder of photos named by expression: pointing-1.jpg, shocked-1.jpg, smirk-1.jpg</small>
       <input name="host_photos" placeholder="D:\Channel\thumbnail-photos"></label>
+    <label>Caller's audio track <small>if OBS records callers on their own track, its number (1, 2, 3...). The wave around a caller's photo then moves only when they talk. Leave empty for one mixed track.</small>
+      <input name="guest_audio_track" inputmode="numeric" placeholder="e.g. 2"></label>
     <label>OBS recordings folder <small>where your recordings are saved</small>
       <input name="recordings_folder" placeholder="D:\OBS"></label>
     <div class="err" id="serr" role="alert"></div>
@@ -447,7 +455,7 @@ function longCard(c) {
     ${rendered}</article>`;
 }
 
-const FRAMINGS = [["auto", "Auto"], ["host", "Host only"], ["full", "Full frame (Scripture)"], ["split", "Split screen"]];
+const FRAMINGS = [["auto", "Auto"], ["host", "Host only"], ["full", "Full frame (Scripture)"], ["split", "Split screen"], ["guest", "Caller photo (audio-only guest)"]];
 const CATS = ["Roast", "Argument Win", "Explainer", "Testimony", "Pastoral"];
 function shortCard(s) {
   const m = f => `/media/${encodeURIComponent(P.id)}/${f}`;
@@ -471,9 +479,25 @@ function shortCard(s) {
           <label><div class="lab">Framing</div><select data-framing>${FRAMINGS.map(([v, l]) => `<option value="${v}" ${s.framing === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
           <label><div class="lab">Category</div><select data-category>${CATS.map(c => `<option ${s.category === c ? "selected" : ""}>${c}</option>`).join("")}</select></label>
         </div>
+        ${s.framing === "guest" ? callerBox(s) : ""}
         ${files.video ? `<div class="actions"><a class="btn" href="${m(files.video)}" download>Download</a>
           <button class="btn" data-approve aria-pressed="${!!s.approved}">${s.approved ? "Approved" : "Approve"}</button></div>` : ""}
       </div></div></article>`;
+}
+
+function callerBox(s) {
+  const g = s.guest_info || {};
+  const initials = (s.guest_name || "?").match(/[A-Za-z0-9]+/g)?.slice(0, 2).map(w => w[0]).join("").toUpperCase() || "?";
+  return `<div class="field"><div class="lab">Caller <small>saved for every live they're on</small></div>
+    <div class="caller">
+      ${g.photo ? `<img class="ph" src="${esc(g.photo)}" alt="${esc(s.guest_name)}">` : `<div class="ph" aria-hidden="true">${esc(initials)}</div>`}
+      <div class="who">
+        <input type="text" data-guestname value="${esc(s.guest_name)}" placeholder="Guest name" aria-label="Guest name">
+        <input type="text" data-handle value="${esc(g.handle || "")}" placeholder="@their-handle" aria-label="Their @handle">
+        <small>${g.photo ? "Photo is sharpened and centred on their face." : "No photo yet: their initials are shown."}</small>
+      </div>
+      <label class="btn small">${g.photo ? "Change photo" : "Add photo"}<input type="file" accept="image/*" data-photo hidden></label>
+    </div></div>`;
 }
 
 function renderBar() {
@@ -570,6 +594,21 @@ function wireCard(card) {
   $$("[data-thumb]", card).forEach(b => b.onclick = () => patch(id, { chosen_thumbnail: +b.dataset.thumb }));
   const ta = $("[data-desc]", card); if (ta) ta.onchange = () => patch(id, { description: ta.value });
   const fr = $("[data-framing]", card); if (fr) fr.onchange = () => patch(id, { framing: fr.value });
+  const gn = $("[data-guestname]", card); if (gn) gn.onchange = () => patch(id, { guest: gn.value.trim() });
+  const hd = $("[data-handle]", card);
+  if (hd) hd.onchange = async () => {
+    try { await api("/api/guests", jsonOpts("PUT", { name: item().guest_name, handle: hd.value })); open(P.id, true); }
+    catch (e) { alert(e.message); }
+  };
+  const ph = $("[data-photo]", card);
+  if (ph) ph.onchange = async () => {
+    if (!ph.files[0]) return;
+    if (!item().guest_name) { alert("Type the guest's name first."); return; }
+    const lab = ph.parentElement; lab.firstChild.textContent = "Enhancing photo…";
+    const fd = new FormData(); fd.append("name", item().guest_name); fd.append("file", ph.files[0]);
+    try { await api("/api/guests/photo", { method: "POST", body: fd }); open(P.id, true); }
+    catch (e) { alert(e.message); lab.firstChild.textContent = "Add photo"; }
+  };
   const ca = $("[data-category]", card); if (ca) ca.onchange = () => patch(id, { category: ca.value });
   const cp = $("[data-copy]", card); if (cp) cp.onclick = async () => {
     const it = item();

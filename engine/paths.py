@@ -24,6 +24,9 @@ MODEL_FILES = {
 SILERO = MODEL_FILES["voice detection"][0]
 YUNET = MODEL_FILES["face detection"][0]
 U2NET = MODEL_FILES["thumbnail cutouts"][0]
+# optional: caller-photo enhancement (without them, photos are resized and sharpened instead)
+ESRGAN = os.path.join(MODELS, "real_esrgan_x4.onnx")
+GFPGAN = os.path.join(MODELS, "gfpgan_1.4.onnx")
 
 CAPTION_FONT = os.path.join(FONTS, "Poppins-Bold.ttf")
 FONT_FILES = ["Anton-Regular.ttf", "Archivo.ttf", "Poppins-Bold.ttf", "Poppins-Black.ttf", "Poppins-ExtraBold.ttf"]

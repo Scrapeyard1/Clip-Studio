@@ -54,9 +54,21 @@ def run(cmd, timeout=None):
                 raise Cancelled()
     t.join(timeout=2)
     if p.returncode:
-        raise RuntimeError(f"{os.path.basename(cmd[0])} failed: " + "".join(err)[-1500:])
+        raise RuntimeError(describe_failure(cmd[0], p.returncode, "".join(err)))
     if fn:
         progress.done = base + last[0]
+
+
+def describe_failure(prog, code, stderr):
+    """FFmpeg's real complaint, not its banner: keep the lines that say what went wrong."""
+    name = os.path.basename(prog)
+    if code < 0 or code in (137, 139, -9, -11):
+        return (f"{name} was stopped by the system (code {code}). This usually means the computer ran out of "
+                "memory; close other apps and press Retry.")
+    lines = [l for l in stderr.splitlines() if l.strip()]
+    keys = ("error", "invalid", "cannot", "could not", "no such", "failed", "not found", "unable", "mismatch")
+    bad = [l for l in lines if any(k in l.lower() for k in keys)]
+    return f"{name} failed (code {code}): " + " | ".join((bad or lines)[-6:])[-1500:]
 
 
 def probe(path):
@@ -143,3 +155,11 @@ def write_json(path, data):
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=1, ensure_ascii=False)
     os.replace(tmp, path)
+
+
+def load_json(path, default=None):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {} if default is None else default

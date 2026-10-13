@@ -31,7 +31,7 @@ import media  # noqa: E402
 import paths  # noqa: E402
 
 LONG_EDIT_KEYS = ("guest", "topic", "start", "end", "cold_open", "protect")
-SHORT_EDIT_KEYS = ("hook", "category", "pieces", "framing", "protect")
+SHORT_EDIT_KEYS = ("hook", "category", "pieces", "framing", "protect", "guest")
 
 
 class Reporter:
@@ -174,11 +174,31 @@ def outputs_for(d, item):
     return {"video": os.path.join(dr, item["id"] + ".mp4")}
 
 
+def short_guest(d, item):
+    """Who a short's caller is: the person's choice, else the conversation the short comes from."""
+    if item.get("guest"):
+        return item["guest"]
+    convs, _ = effective_items(d)
+    a = item["pieces"][0][0] if item.get("pieces") else 0
+    hit = next((c for c in convs if c["start"] <= a <= c["end"]), None)
+    return hit.get("guest") if hit else ""
+
+
+def guest_for_render(d, item, cfg):
+    import guests
+    g = guests.get(short_guest(d, item) or "Guest")
+    return dict(g, track=cfg.get("guest_audio_track", 0))
+
+
 def render_inputs(d, item, cfg):
     """Everything a render depends on; if any of it changes, the render is stale."""
     keys = LONG_EDIT_KEYS if item["kind"] == "long" else SHORT_EDIT_KEYS
-    return {"item": {k: item.get(k) for k in keys}, "glossary": glossary_text(d),
-            "sting": cfg.get("sting"), "outro": cfg.get("outro"), "v": 2}
+    out = {"item": {k: item.get(k) for k in keys}, "glossary": glossary_text(d),
+           "sting": cfg.get("sting"), "outro": cfg.get("outro"), "v": 2}
+    if item["kind"] == "short" and item.get("framing") == "guest":      # new photo or handle -> re-render
+        g = guest_for_render(d, item, cfg)
+        out["guest"] = {k: g.get(k) for k in ("name", "handle", "version", "track")}
+    return out
 
 
 def render_problems(item):
@@ -221,9 +241,8 @@ def render(d, source, ids, cfg=None, rep=None):
     for n, iid in enumerate(ids, 1):
         item = by_id[iid]
         rep.progress(int(100 * (n - 1) / len(ids)))
-        # inside one item, move the bar with FFmpeg's position (rendering a long-form passes over the
-        # footage about twice: pieces, then joining them)
-        total = 2 * expected_seconds(item) if item["kind"] == "long" else expected_seconds(item)
+        # inside one item, move the bar with FFmpeg's position
+        total = 2 * expected_seconds(item)     # every render passes over the footage twice: pieces, then the join
         media.progress.done = 0.0
         media.progress.fn = lambda sec, n=n, total=total: rep.progress(
             int(100 * (n - 1 + min(0.99, sec / max(total, 1))) / len(ids)))
@@ -251,8 +270,10 @@ def render(d, source, ids, cfg=None, rep=None):
         else:
             import render_short
             run_step(d, f"render-{iid}", f"Render short: {label}", [outs["video"]],
-                     lambda item=item: render_short.render(source, tr, dict(item, name=iid),
-                                                           os.path.join(d, "drafts"), quiet), rep, inputs)
+                     lambda item=item: render_short.render(
+                         source, tr, dict(item, name=iid), os.path.join(d, "drafts"), quiet,
+                         guest=guest_for_render(d, item, cfg) if item.get("framing") == "guest" else None),
+                     rep, inputs)
     media.progress.fn = None
     rep.progress(100)
 

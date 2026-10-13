@@ -21,7 +21,7 @@ import uuid
 import webbrowser
 
 import uvicorn
-from fastapi import Body, FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -37,11 +37,11 @@ PROJECTS = paths.PROJECTS
 VIDEO_EXT = {".mp4", ".mov", ".mkv", ".m4v", ".webm", ".flv"}
 os.makedirs(PROJECTS, exist_ok=True)
 SETTINGS = os.path.join(PROJECTS, "settings.json")
-SETTING_KEYS = {"anthropic_api_key", "sting", "outro", "host_photos", "recordings_folder"}
+SETTING_KEYS = {"anthropic_api_key", "sting", "outro", "host_photos", "recordings_folder", "guest_audio_track"}
 EDITABLE = {
     "long": {"guest", "topic", "start", "end", "cold_open", "protect", "selected",
              "titles", "chosen_title", "description", "chosen_thumbnail", "approved"},
-    "short": {"hook", "category", "pieces", "framing", "protect", "selected", "approved"},
+    "short": {"hook", "category", "pieces", "framing", "protect", "selected", "approved", "guest"},
 }
 
 from contextlib import asynccontextmanager
@@ -82,6 +82,8 @@ def put_settings(body: dict = Body(...)):
             v = str(v).strip().strip('"')
             if k in ("sting", "outro") and v and not media.valid_media(v):
                 raise HTTPException(400, f"The {k} file wasn't found there, or it isn't a playable video.")
+            if k == "guest_audio_track" and v and not v.isdigit():
+                raise HTTPException(400, "The caller's audio track is a number: 1 for the first track, 2 for the second...")
             if k in ("host_photos", "recordings_folder") and v and not os.path.isdir(v):
                 raise HTTPException(400, "That folder wasn't found.")
             s[k] = v
@@ -155,6 +157,13 @@ def view(pid):
         rel = lambda f: os.path.relpath(f, d).replace("\\", "/")
         if os.path.exists(outs["video"]):
             v["files"] = {k: rel(f) for k, f in outs.items() if os.path.exists(f)}
+        if it["kind"] == "short":
+            import guests
+            gname = pipeline.short_guest(d, it) or ""
+            g = guests.get(gname) if gname else None
+            v["guest_name"] = gname
+            v["guest_info"] = {"handle": g["handle"], "photo": f"/guest-photo/{g['slug']}.png?v={g['version']}"
+                               if g["photo"] else None} if g else {"handle": "", "photo": None}
         if it["kind"] == "long":
             cuts = pipeline.load(os.path.join(d, "drafts"), it["id"] + ".cuts.json")
             if cuts:
@@ -249,7 +258,10 @@ queue = Queue()
 
 def render_cfg():
     s = settings()
-    return {k: s[k] for k in ("sting", "outro", "host_photos", "encoder") if s.get(k)}
+    cfg = {k: s[k] for k in ("sting", "outro", "host_photos", "encoder") if s.get(k)}
+    if str(s.get("guest_audio_track", "")).isdigit() and int(s["guest_audio_track"]) > 0:
+        cfg["guest_audio_track"] = int(s["guest_audio_track"]) - 1      # people count tracks from 1
+    return cfg
 
 
 def run_job(pid, job, ids, ev):
@@ -406,6 +418,12 @@ def edit_item(pid: str, iid: str, changes: dict = Body(...)):
             if not isinstance(spans, list) or any(not (isinstance(s, list) and len(s) == 2 and 0 <= s[0] < s[1] <= dur + 1)
                                                   for s in spans):
                 raise HTTPException(400, "Each clip needs a start before its end, inside the recording.")
+    if "framing" in changes:
+        import render_short
+        if changes["framing"] not in render_short.FRAMINGS:
+            raise HTTPException(400, "Unknown framing")
+    if "guest" in changes and not (isinstance(changes["guest"], str) and len(changes["guest"]) <= 60):
+        raise HTTPException(400, "Guest name is too long")
     for k in ("start", "end"):
         if k in changes and not (isinstance(changes[k], (int, float)) and 0 <= changes[k] <= dur + 1):
             raise HTTPException(400, "That time is outside the recording.")
@@ -497,6 +515,51 @@ def transcript(pid: str, start: float = Query(...), end: float = Query(...)):
     tr = pipeline.corrected_transcript(d)
     return [{"start": s["start"], "end": s["end"], "text": s["text"]}
             for s in tr["segments"] if s["end"] > start and s["start"] < end]
+
+
+# ---------------- guest library (photos and handles, shared by every live) ----------------
+@app.get("/api/guests")
+def list_guests():
+    import guests
+    return [{"name": g["name"], "handle": g["handle"],
+             "photo": f"/guest-photo/{g['slug']}.png?v={g['version']}" if g["photo"] else None}
+            for g in guests.all_guests()]
+
+
+@app.put("/api/guests")
+def put_guest(body: dict = Body(...)):
+    import guests
+    name = str(body.get("name") or "").strip()
+    if not name or len(name) > 60:
+        raise HTTPException(400, "Give the guest a name first.")
+    guests.set_info(name, str(body.get("handle") or ""))
+    return list_guests()
+
+
+@app.post("/api/guests/photo")
+def guest_photo(name: str = Form(...), file: UploadFile = File(...)):
+    """Saves the original and builds the enhanced photo (upscaled, face restored, centred). ~10 s."""
+    import guests
+    name = name.strip()
+    if not name:
+        raise HTTPException(400, "Give the guest a name first.")
+    data = file.file.read(25 * 1024 * 1024 + 1)
+    if len(data) > 25 * 1024 * 1024:
+        raise HTTPException(400, "That photo is over 25 MB.")
+    try:
+        guests.save_photo(name, data, os.path.splitext(file.filename or "")[1])
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return list_guests()
+
+
+@app.get("/guest-photo/{slug}.png")
+def guest_photo_file(slug: str):
+    import guests
+    f = os.path.join(guests.root(), re.sub(r"[^a-z0-9-]", "", slug), "photo.png")
+    if not os.path.isfile(f):
+        raise HTTPException(404, "No photo yet")
+    return FileResponse(f)
 
 
 @app.get("/media/{pid}/{path:path}")

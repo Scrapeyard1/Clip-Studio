@@ -283,3 +283,65 @@ def test_failed_step_leaves_no_partial_file(tmp_path):
     with pytest.raises(media.Cancelled):
         pipeline.run_step(str(tmp_path), "k", "x", [out], fn, pipeline.Reporter())
     assert not os.path.exists(media.tmp_name(out))
+
+
+# ---------- caller framing ----------
+needs_models = pytest.mark.skipif(not os.path.isfile(paths.YUNET), reason="run scripts/get_models.py first")
+
+
+def test_guest_library_keeps_handles_and_photos(tmp_path, monkeypatch):
+    import cv2
+    import numpy as np
+    import guests
+    monkeypatch.setattr(paths, "PROJECTS", str(tmp_path))
+    g = guests.set_info("Black on YT (Mr. Clean)", "blackonyt")
+    assert g["handle"] == "@blackonyt" and g["slug"] == "black-on-yt-mr-clean" and g["photo"] is None
+    img = np.full((90, 120, 3), 120, np.uint8)
+    ok, png = cv2.imencode(".png", img)
+    g = guests.save_photo("Black on YT (Mr. Clean)", png.tobytes(), "png")
+    out = cv2.imread(g["photo"])
+    assert out.shape == (guests.SIZE, guests.SIZE, 3) and g["handle"] == "@blackonyt"
+    with pytest.raises(ValueError):
+        guests.save_photo("X", b"not an image", "jpg")
+    assert [x["name"] for x in guests.all_guests()] == ["Black on YT (Mr. Clean)"]
+
+
+def test_wave_follows_the_audio():
+    import numpy as np
+    import caller
+    sr, fps = caller.SR, 30
+    t = np.arange(sr * 2) / sr
+    sound = np.concatenate([np.zeros(sr), 0.3 * np.sin(2 * np.pi * 300 * t[:sr])]).astype(np.float32)
+    L = caller.bands(sound, 60, fps)
+    assert L[:25].max() < 0.05            # silence: bars rest
+    assert L[40:].max() > 0.5             # voice: bars move
+
+
+def test_new_caller_photo_or_handle_makes_the_short_stale(tmp_path, monkeypatch):
+    import guests
+    monkeypatch.setattr(paths, "PROJECTS", str(tmp_path))
+    d = str(tmp_path / "live")
+    os.makedirs(os.path.join(d, "work"))
+    media.write_json(os.path.join(d, "work", "plan.json"), {"conversations": [
+        {"id": "c100", "guest": "Ana", "start": 100, "end": 900, "cold_open": [[800, 812]]}],
+        "shorts": [{"id": "s200", "hook": "h", "pieces": [[200, 230]], "framing": "guest"}]})
+    short = pipeline.effective_items(d)[1][0]
+    assert pipeline.short_guest(d, short) == "Ana"                 # found from the conversation
+    before = pipeline.render_inputs(d, short, {})
+    guests.set_info("Ana", "@ana")
+    assert pipeline.render_inputs(d, short, {}) != before
+
+
+@needs_models
+def test_caller_short_renders_with_badge(tmp_path):
+    import render_short
+    src = make_video(str(tmp_path / "live.mp4"), 12, rate="30")
+    tr = {"duration": 12, "segments": [{"start": 1, "end": 3, "text": "hello there", "words": [
+        {"w": "hello", "s": 1.0, "e": 1.5}, {"w": "there", "s": 1.6, "e": 2.2}]}]}
+    out = render_short.render(src, tr, {"name": "s1", "hook": "Hook", "pieces": [[0.5, 4], [6, 9]],
+                                        "framing": "guest"}, str(tmp_path), quiet=[],
+                              guest={"name": "Ana Lee", "handle": "@ana", "photo": None})
+    info = media.probe(out["video"])
+    assert (info["width"], info["height"]) == (1080, 1920)
+    assert abs(info["duration"] - out["seconds"]) < 0.2
+    assert not [f for f in os.listdir(tmp_path) if f.startswith("short-")]      # work folder cleaned up

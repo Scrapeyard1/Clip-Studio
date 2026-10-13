@@ -7,7 +7,9 @@
   * hook text pinned at the top for the whole clip
   * framing per short: "auto" (host crop, switching to the full frame for screen shares),
     "host" (always the host crop), "full" (whole frame: Scripture on screen), "split"
-    (whole frame on top, host crop underneath)
+    (whole frame on top, host crop underneath), "guest" (for audio-only callers: host or the shared
+    screen in a gold-edged box up top, captions in the middle, the caller's photo in a circle with
+    an audio-driven ring and their @handle at the bottom, over a blurred backdrop of the live)
 """
 import argparse, json, os, shutil, statistics, tempfile
 import cv2
@@ -17,7 +19,10 @@ from cuts import safe_cuts
 from timeline import Timeline
 
 OW, OH, FPS = 1080, 1920, 30
-FRAMINGS = ("auto", "host", "full", "split")
+FRAMINGS = ("auto", "host", "full", "split", "guest")
+# caller layout (1080x1920)
+PANEL_W, PANEL_H, PANEL_Y = 960, 720, 330
+BADGE_X, BADGE_Y = (OW - 760) // 2, 1170
 
 
 def layout_runs(video, pieces, step=0.4, detect_screens=True):
@@ -92,7 +97,12 @@ def ass_time(t):
     return f"{int(h)}:{int(m):02d}:{s:05.2f}"
 
 
-def build_ass(path, words, hook, total):
+def build_ass(path, words, hook, total, layout="full"):
+    cap = "Style: Cap,Poppins,150,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,1,0,0,0,100,100,0,0,1,10,4,2,70,70,600,1"
+    hk = "Style: Hook,Poppins,96,&H00FFFFFF,&H00FFFFFF,&H00000000,&H28000000,1,0,0,0,100,100,0,0,3,26,0,8,80,80,200,1"
+    if layout == "guest":     # captions between the host box and the caller badge; hook above the box
+        cap = "Style: Cap,Poppins,100,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,1,0,0,0,100,100,0,0,1,8,3,2,60,60,712,1"
+        hk = "Style: Hook,Poppins,84,&H00FFFFFF,&H00FFFFFF,&H00000000,&H28000000,1,0,0,0,100,100,0,0,3,22,0,8,70,70,96,1"
     head = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {OW}
@@ -101,8 +111,8 @@ WrapStyle: 0
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Cap,Poppins,150,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,1,0,0,0,100,100,0,0,1,10,4,2,70,70,600,1
-Style: Hook,Poppins,96,&H00FFFFFF,&H00FFFFFF,&H00000000,&H28000000,1,0,0,0,100,100,0,0,3,26,0,8,80,80,200,1
+{cap}
+{hk}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -134,6 +144,21 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
 def _piece_filter(i, x0, mode, cw, ch, top, W, H):
+    if mode == "guest":         # blurred live behind; host (or the shared screen) in a gold-edged box
+        bg = (f"[{i}:v]split[bg{i}][fg{i}];[bg{i}]scale={OW}:{OH}:force_original_aspect_ratio=increase,"
+              f"crop={OW}:{OH},boxblur=28:2,eq=brightness=-0.28:saturation=1.15[bb{i}];")
+        if x0 is not None:
+            ph = int(ch * 0.8) // 2 * 2                    # a little closer: keeps chat/donation edges out
+            pw = min(int(ph * 4 / 3) // 2 * 2, W)
+            px = int(min(max(x0 + cw / 2 - pw / 2, 0), W - pw)) // 2 * 2
+            panel = f"[fg{i}]crop={pw}:{ph}:{px}:{top},scale={PANEL_W}:{PANEL_H}:flags=lanczos"
+            py = PANEL_Y
+        else:
+            sh = int(PANEL_W * H / W) // 2 * 2
+            panel = f"[fg{i}]scale={PANEL_W}:{sh}:flags=lanczos"
+            py = PANEL_Y + max(0, (PANEL_H - sh) // 2)
+        return (bg + panel + f",pad=iw+12:ih+12:6:6:color=0xFFC83A[pp{i}];"
+                f"[bb{i}][pp{i}]overlay=(W-w)/2:{py - 6},setsar=1,setpts=PTS-STARTPTS[v{i}]")
     if mode == "split":         # whole frame on top, host underneath
         fh = int(OW * H / W) // 2 * 2
         bh = OH - fh
@@ -151,8 +176,9 @@ def _piece_filter(i, x0, mode, cw, ch, top, W, H):
             f"[bb{i}][ff{i}]overlay=(W-w)/2:(H-h)/2-120,setsar=1,setpts=PTS-STARTPTS[v{i}]")
 
 
-def render(video, transcript, clip, out_dir, quiet=None, crop_top=0.125):
-    """clip: {name, hook, pieces[[a,b]], framing}. Returns {"video": path, ...stats}."""
+def render(video, transcript, clip, out_dir, quiet=None, crop_top=0.125, guest=None):
+    """clip: {name, hook, pieces[[a,b]], framing}. Returns {"video": path, ...stats}.
+    guest (for the "guest" framing): {name, handle, photo, track} - photo may be None (initials are used)."""
     os.makedirs(out_dir, exist_ok=True)
     mode = clip.get("framing", "auto")
     if mode not in FRAMINGS:
@@ -165,7 +191,7 @@ def render(video, transcript, clip, out_dir, quiet=None, crop_top=0.125):
     if mode == "full":
         runs, nfaces = [(a, b, None) for a, b in keep], 0
     else:
-        runs, nfaces = layout_runs(video, keep, detect_screens=(mode == "auto"))
+        runs, nfaces = layout_runs(video, keep, detect_screens=(mode in ("auto", "guest")))
     top = int(H * crop_top) // 2 * 2
     ch = (H - top) // 2 * 2
     cw = int(ch * 9 / 16) // 2 * 2
@@ -181,20 +207,46 @@ def render(video, transcript, clip, out_dir, quiet=None, crop_top=0.125):
     work = tempfile.mkdtemp(prefix="short-", dir=out_dir)
     try:
         ass = os.path.join(work, "caps.ass")
-        build_ass(ass, tl.words_on_output(transcript), clip["hook"], total)
-        cmd, fc, parts = [paths.ffmpeg(), "-y"], [], []
+        build_ass(ass, tl.words_on_output(transcript), clip["hook"], total, "guest" if mode == "guest" else "full")
+        # 1) each piece on its own, so memory stays flat however long the short is
+        listing = []
         for i, seg in enumerate(tl.segments):
             a, b = tl.src_seconds(seg)
-            cmd += ["-ss", f"{a:.6f}", "-t", f"{b - a:.6f}", "-i", video]
             f = min(0.015, (b - a) / 4)
-            fc.append(_piece_filter(i, x0s[i], mode, cw, ch, top, W, H))
-            fc.append(f"[{i}:a]aresample=48000,asetpts=PTS-STARTPTS,afade=t=in:d={f:.3f},"
-                      f"afade=t=out:st={b - a - f:.3f}:d={f:.3f}[a{i}]")
-            parts.append(f"[v{i}][a{i}]")
-        fc.append(f"{''.join(parts)}concat=n={len(tl.segments)}:v=1:a=1[cv][ca]")
-        fc.append(f"[cv]fps={FPS},ass='{paths.ffmpeg_filter_path(ass)}':fontsdir='{paths.ffmpeg_filter_path(paths.FONTS)}',"
+            fc = [_piece_filter(0, x0s[i], mode, cw, ch, top, W, H).replace("[v0]", "[v]"),
+                  f"[0:a]aresample=48000,asetpts=PTS-STARTPTS,afade=t=in:d={f:.3f},"
+                  f"afade=t=out:st={b - a - f:.3f}:d={f:.3f}[a]"]
+            script = os.path.join(work, f"piece{i}.txt")
+            open(script, "w", encoding="utf-8").write(";\n".join(fc))
+            piece = os.path.join(work, f"piece{i:03d}.mkv")
+            media.run([paths.ffmpeg(), "-y", "-ss", f"{a:.6f}", "-t", f"{b - a:.6f}", "-i", video,
+                       "-filter_complex_script", script, "-map", "[v]", "-map", "[a]",
+                       "-c:v", "libx264", "-preset", "veryfast", "-crf", "14", "-pix_fmt", "yuv420p",
+                       "-c:a", "pcm_s16le", "-ac", "2", "-ar", "48000", piece])
+            listing.append("file '" + piece.replace("\\", "/").replace("'", "'\\''") + "'")
+        lst = os.path.join(work, "pieces.txt")
+        open(lst, "w", encoding="utf-8").write("\n".join(listing) + "\n")
+
+        # 2) join them, add the caller badge (if any), captions and loudness in one final pass
+        cmd = [paths.ffmpeg(), "-y", "-f", "concat", "-safe", "0", "-i", lst]
+        fc = []
+        if mode == "guest":
+            import caller
+            g = guest or {}
+            track = int(g.get("track") or 0)
+            if track >= len(src["audio"]):
+                track = 0
+            levels = caller.bands(caller.audio_for(video, tl, track, work), int(round(total * FPS)) + 1, FPS)
+            badge = caller.render_badge(os.path.join(work, "badge.mov"), g.get("photo"), g.get("name") or "",
+                                        g.get("handle") or "", levels, FPS)
+            cmd += ["-i", badge]
+            fc.append(f"[0:v][1:v]overlay={BADGE_X}:{BADGE_Y}:eof_action=pass:format=auto[cvb]")
+            vin = "cvb"
+        else:
+            vin = "0:v"
+        fc.append(f"[{vin}]fps={FPS},ass='{paths.ffmpeg_filter_path(ass)}':fontsdir='{paths.ffmpeg_filter_path(paths.FONTS)}',"
                   f"format=yuv420p[v]")
-        fc.append("[ca]loudnorm=I=-14:TP=-1.5:LRA=11[a]")
+        fc.append("[0:a]loudnorm=I=-14:TP=-1.5:LRA=11[a]")
         script = os.path.join(work, "filter.txt")
         open(script, "w", encoding="utf-8").write(";\n".join(fc))
         final = os.path.join(out_dir, f"{clip['name']}.mp4")

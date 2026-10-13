@@ -9,7 +9,8 @@ thumbnails, and a timeline your editor opens in DaVinci Resolve or Premiere Pro.
 1. Install Python 3.11+ and FFmpeg.
    Mac: `brew install ffmpeg python`. Windows: `winget install ffmpeg Python.Python.3.12`.
 2. `pip install -r requirements.txt`
-3. `python scripts/get_models.py` downloads the models (~830 MB) and any missing fonts, then
+3. `python scripts/get_models.py` downloads the models (~1.2 GB, including ~410 MB for caller-photo
+   enhancement; add `--no-photo-models` to skip those) and any missing fonts, then
    prints a setup check. Every line should say `ok` except the Claude API key, which you add in the app.
 4. `python app/server.py` opens http://localhost:8765. Add your Claude API key in Settings, plus
    the sting, the Patreon outro and your thumbnail photo folder.
@@ -39,7 +40,11 @@ with the exact fix.
    topic, start and end, and the cold-open clips, and press **Hear it** to play any stretch with
    10 seconds of context around it. For shorts: hear each piece, and pick the framing:
    *Auto* (follows the face, switches to the screen when Scripture is shared), *Host only*,
-   *Full frame* (for Scripture and screen shares), or *Split screen*. Under **Names and terms**, fix what
+   *Full frame* (for Scripture and screen shares), *Split screen*, or *Caller photo* for audio-only
+   guests: you (or the shared screen) in a gold-edged box up top, captions in the middle, and the
+   caller's photo in a circle with a ring of bars that moves with the audio and their @handle.
+   Add a caller's photo and handle once on any short; it's reused on every live they join. Photos are
+   enhanced locally (4x upscale with Real-ESRGAN, face restored with GFPGAN, centred on the face). Under **Names and terms**, fix what
    the transcriber gets wrong (`McKills a day => Melchizedek`); corrections go into captions, titles
    and descriptions without disturbing timing.
 3. **Render selected**. Tick what you want and press Render. One render runs at a time; other
@@ -99,7 +104,8 @@ python -m pytest -q tests          # regression tests, ~10 seconds, no models ne
 | `engine/moments.py` + `plan_check.py` | Claude's plan, then validation (one automatic repair attempt) |
 | `engine/glossary.py` | Names and terms corrections that keep word timing |
 | `engine/render_long.py` | Cold open → sting → conversation with safe cuts → Patreon outro |
-| `engine/render_short.py` | 1080x1920 short: framing modes, word-by-word captions, hook text |
+| `engine/render_short.py` | 1080x1920 short: framing modes, word-by-word captions, hook text. Rendered piece by piece, so memory stays flat for any length |
+| `engine/guests.py` + `caller.py` | Guest library (photo, @handle) with photo enhancement, and the audio-driven caller badge |
 | `engine/export_timeline.py` | FCP7 XML for Resolve and Premiere: cuts against the original file, a marker at every trimmed pause |
 | `engine/metadata.py` | Titles, description, chapters (on the final cut), tags |
 | `engine/thumbnail.py` | 1280x720 thumbnails in the channel's style |
@@ -108,8 +114,9 @@ python -m pytest -q tests          # regression tests, ~10 seconds, no models ne
 
 ## Known limits
 
-- **Guest-only framing** isn't offered: most guests call in audio-only, so there's no guest face to
-  frame. Video guests appear in *Full frame* and *Split screen*.
+- The wave around a caller's photo follows the whole mix unless OBS records callers on their own
+  audio track: set its number in Settings ("Caller's audio track") and it moves only when they talk.
+  YouTube downloads have one mixed track.
 - Speaker labels per OBS audio track aren't used yet; on one mixed track captions don't say who's talking.
 - The sting and outro are marked as gaps in the editor timeline until their files are set in Settings.
 - No one-click installer yet.
