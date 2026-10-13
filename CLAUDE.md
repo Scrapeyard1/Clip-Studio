@@ -29,7 +29,7 @@ python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 python scripts/get_models.py        # ~1.2 GB into ./models (gitignored)
 python app/server.py                # http://localhost:8765
-python -m pytest -q tests           # 25 tests, ~40 s
+python -m pytest -q tests           # 36 tests, ~1 min
 ```
 The Claude API key goes in the app's Settings (stored in projects/settings.json, gitignored).
 Never commit it, print it, or paste it into files. Elijah has a working key with credit.
@@ -47,10 +47,12 @@ Done and tested on Linux (not yet on a Mac or Windows; first Mac run is the next
 - Shorts render piece by piece (flat memory; the old one-pass render was OOM-killed at 6 GB).
 - Claude calls go through engine/claude_api.py: streaming, adaptive thinking, effort "medium".
   Sonnet 5.5 thinks by default; a low max_tokens returns NO text. Keep that helper.
-- Branch review-upgrades (not merged yet): chat editor (engine/editor_chat.py, tool loop in
+- On main: chat editor (engine/editor_chat.py, tool loop in
   claude_api.converse) that edits clips via server.apply_edit and saves rules (engine/editor_rules.py,
   injected into planner + titles prompts); upload % and analysis % with time left; poster + filmstrip
   on upload; greyed "Upcoming" previews for unrendered items.
+- Full preview before rendering: clipstudio.cut_plan (same timeline code as the renderers) +
+  /cutclip joins nearby parts at 360p; the UI player plays parts back to back. "Hear it" is exact.
 - First real run on the Oct 1 live ("What is ILLOGICAL about the Trinity?", 2:41:51) found 11
   conversations and 8 shorts; titles/description/chapters generated for "Black on YT".
 
