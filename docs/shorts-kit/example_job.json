@@ -1,0 +1,71 @@
+{
+  "source_id": "SYNTHETIC_DEMO_NOT_REAL_FOOTAGE",
+  "duration_s": 120,
+  "max_short_s": 180,
+  "target_platforms": [
+    "youtube",
+    "tiktok"
+  ],
+  "segments": [
+    {
+      "id": "s0",
+      "start": 30,
+      "end": 36,
+      "speaker": "guest",
+      "text": "Does having authority mean someone can never be mistaken?",
+      "words": [
+        {
+          "w": "Does",
+          "s": 30,
+          "e": 30.3
+        },
+        {
+          "w": "authority",
+          "s": 31,
+          "e": 31.8
+        }
+      ]
+    },
+    {
+      "id": "s1",
+      "start": 37,
+      "end": 47,
+      "speaker": "host",
+      "text": "We need to distinguish authority from immunity to error. Those are different claims.",
+      "words": [
+        {
+          "w": "different",
+          "s": 45,
+          "e": 45.5
+        },
+        {
+          "w": "claims.",
+          "s": 45.6,
+          "e": 46
+        }
+      ]
+    },
+    {
+      "id": "s2",
+      "start": 49,
+      "end": 57,
+      "speaker": "host",
+      "text": "An additional premise is needed to move from one claim to the other.",
+      "words": [
+        {
+          "w": "additional",
+          "s": 49.2,
+          "e": 49.8
+        },
+        {
+          "w": "premise",
+          "s": 50,
+          "e": 50.5
+        }
+      ]
+    }
+  ],
+  "assets": [],
+  "regions": [],
+  "observations": []
+}

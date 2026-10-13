@@ -1,0 +1,393 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Clip Studio editorial plan v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "source_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "clips": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "preset": {
+            "enum": [
+              "clean_argument",
+              "debate_exchange",
+              "humorous_reversal",
+              "pastoral"
+            ]
+          },
+          "review_status": {
+            "const": "draft_needs_review"
+          },
+          "viewer_question": {
+            "type": "string",
+            "minLength": 1
+          },
+          "payoff": {
+            "type": "string",
+            "minLength": 1
+          },
+          "hook_overlay": {
+            "type": "string",
+            "minLength": 1
+          },
+          "titles": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "scores": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "clarity": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 5
+              },
+              "payoff": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 5
+              },
+              "context_integrity": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 5
+              },
+              "curiosity": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 5
+              },
+              "delivery": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 5
+              },
+              "visual_readiness": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 5
+              },
+              "distinctiveness": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 5
+              }
+            },
+            "required": [
+              "clarity",
+              "payoff",
+              "context_integrity",
+              "curiosity",
+              "delivery",
+              "visual_readiness",
+              "distinctiveness"
+            ]
+          },
+          "score_reasons": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "clarity": {
+                "type": "string",
+                "minLength": 1
+              },
+              "payoff": {
+                "type": "string",
+                "minLength": 1
+              },
+              "context_integrity": {
+                "type": "string",
+                "minLength": 1
+              },
+              "curiosity": {
+                "type": "string",
+                "minLength": 1
+              },
+              "delivery": {
+                "type": "string",
+                "minLength": 1
+              },
+              "visual_readiness": {
+                "type": "string",
+                "minLength": 1
+              },
+              "distinctiveness": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "clarity",
+              "payoff",
+              "context_integrity",
+              "curiosity",
+              "delivery",
+              "visual_readiness",
+              "distinctiveness"
+            ]
+          },
+          "pieces": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "start": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "end": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "speed": {
+                  "const": 1
+                },
+                "reason": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "start",
+                "end",
+                "speed",
+                "reason"
+              ]
+            },
+            "minItems": 1
+          },
+          "evidence_segment_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 1
+          },
+          "context_review": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "start": {
+                "type": "number",
+                "minimum": 0
+              },
+              "end": {
+                "type": "number",
+                "minimum": 0
+              },
+              "qualification_check": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "start",
+              "end",
+              "qualification_check"
+            ]
+          },
+          "layouts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "start": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "end": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "kind": {
+                  "enum": [
+                    "source_fit",
+                    "host_closeup",
+                    "guest_closeup",
+                    "stacked",
+                    "evidence_focus",
+                    "host_avatar"
+                  ]
+                },
+                "region_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 0
+                },
+                "zoom": {
+                  "type": "number",
+                  "minimum": 1,
+                  "maximum": 1.25
+                },
+                "asset_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "start",
+                "end",
+                "kind",
+                "region_ids",
+                "zoom"
+              ]
+            },
+            "minItems": 1
+          },
+          "captions": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "preset": {
+                "enum": [
+                  "clean_phrase",
+                  "punchy_word"
+                ]
+              },
+              "verbatim": {
+                "const": true
+              }
+            },
+            "required": [
+              "preset",
+              "verbatim"
+            ]
+          },
+          "effects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "sfx",
+                    "music"
+                  ]
+                },
+                "asset_id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "start": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "end": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "gain_db": {
+                  "type": "number",
+                  "minimum": -60,
+                  "maximum": 0
+                },
+                "reason": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "kind",
+                "asset_id",
+                "start",
+                "end",
+                "gain_db",
+                "reason"
+              ]
+            },
+            "minItems": 0
+          },
+          "review_notes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "minItems": 0
+          }
+        },
+        "required": [
+          "id",
+          "preset",
+          "review_status",
+          "viewer_question",
+          "payoff",
+          "hook_overlay",
+          "titles",
+          "scores",
+          "score_reasons",
+          "pieces",
+          "evidence_segment_ids",
+          "context_review",
+          "layouts",
+          "captions",
+          "effects",
+          "review_notes"
+        ]
+      },
+      "minItems": 0
+    },
+    "rejected": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source_start": {
+            "type": "number",
+            "minimum": 0
+          },
+          "source_end": {
+            "type": "number",
+            "minimum": 0
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "source_start",
+          "source_end",
+          "reason"
+        ]
+      },
+      "minItems": 0
+    }
+  },
+  "required": [
+    "schema_version",
+    "source_id",
+    "clips",
+    "rejected"
+  ]
+}

@@ -1,0 +1,81 @@
+{
+  "schema_version": "1.0",
+  "source_id": "SYNTHETIC_DEMO_NOT_REAL_FOOTAGE",
+  "clips": [
+    {
+      "id": "demo-01",
+      "preset": "clean_argument",
+      "review_status": "draft_needs_review",
+      "viewer_question": "Does authority imply immunity from error?",
+      "payoff": "The speaker distinguishes two claims and identifies a missing premise.",
+      "hook_overlay": "Authority = infallibility?",
+      "titles": [
+        "Does Authority Mean Infallibility?",
+        "The Missing Premise in This Argument",
+        "Two Claims That Need to Be Distinguished"
+      ],
+      "scores": {
+        "clarity": 5,
+        "payoff": 4,
+        "context_integrity": 4,
+        "curiosity": 4,
+        "delivery": 1,
+        "visual_readiness": 1,
+        "distinctiveness": 4
+      },
+      "score_reasons": {
+        "clarity": "Synthetic demonstration; not a measured prediction.",
+        "payoff": "Synthetic demonstration; not a measured prediction.",
+        "context_integrity": "Synthetic demonstration; not a measured prediction.",
+        "curiosity": "Synthetic demonstration; not a measured prediction.",
+        "delivery": "Synthetic demonstration; not a measured prediction.",
+        "visual_readiness": "Synthetic demonstration; not a measured prediction.",
+        "distinctiveness": "Synthetic demonstration; not a measured prediction."
+      },
+      "pieces": [
+        {
+          "start": 30,
+          "end": 47,
+          "speed": 1,
+          "reason": "Retain question and full distinction."
+        },
+        {
+          "start": 49,
+          "end": 57,
+          "speed": 1,
+          "reason": "Retain conclusion; hypothetical quiet gap removed for demonstration."
+        }
+      ],
+      "evidence_segment_ids": [
+        "s0",
+        "s1",
+        "s2"
+      ],
+      "context_review": {
+        "start": 0,
+        "end": 90,
+        "qualification_check": "Synthetic fixture only. No claim that real context was inspected."
+      },
+      "layouts": [
+        {
+          "start": 0,
+          "end": 25,
+          "kind": "source_fit",
+          "region_ids": [],
+          "zoom": 1
+        }
+      ],
+      "captions": {
+        "preset": "clean_phrase",
+        "verbatim": true
+      },
+      "effects": [],
+      "review_notes": [
+        "Synthetic data, not a publishable clip.",
+        "Word list is partial for demonstration. Real jobs need complete word alignment.",
+        "No visual or audio inspection performed."
+      ]
+    }
+  ],
+  "rejected": []
+}
