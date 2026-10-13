@@ -126,6 +126,20 @@ def outputs(out_dir, name):
             (("video", ".mp4"), ("srt", ".srt"), ("xml", ".xml"), ("timeline", ".timeline.json"), ("cuts", ".cuts.json"))}
 
 
+def plan_timeline(fps, transcript, item, cfg=None, quiet=None):
+    """The finished video's exact sequence (cold open, sting, conversation with pauses trimmed, outro),
+    without rendering anything. Used by render() and by the full preview, so both always agree."""
+    cfg = cfg or {}
+    rep = safe_cuts(transcript, item["start"], item["end"], "long", item.get("protect", []), quiet)
+    sting = cfg.get("sting") if cfg.get("sting") and os.path.isfile(cfg["sting"]) else None
+    outro = cfg.get("outro") if cfg.get("outro") and os.path.isfile(cfg["outro"]) else None
+    tl = Timeline.for_longform(fps, item["cold_open"], rep.keep,
+                               media.probe(sting)["duration"] if sting else CARD_SECONDS["sting"],
+                               media.probe(outro)["duration"] if outro else CARD_SECONDS["outro"],
+                               "sting" if sting else "card:sting", "outro" if outro else "card:outro")
+    return tl, rep, sting, outro
+
+
 def render(video, transcript, item, out_dir, cfg=None, quiet=None, timeline_only=False):
     """item: {name, start, end, cold_open[[a,b]], protect[[a,b]]}. Returns the outputs dict."""
     cfg = cfg or {}
@@ -135,13 +149,7 @@ def render(video, transcript, item, out_dir, cfg=None, quiet=None, timeline_only
     out = outputs(out_dir, name)
     os.makedirs(out_dir, exist_ok=True)
 
-    rep = safe_cuts(transcript, item["start"], item["end"], "long", item.get("protect", []), quiet)
-    sting = cfg.get("sting") if cfg.get("sting") and os.path.isfile(cfg["sting"]) else None
-    outro = cfg.get("outro") if cfg.get("outro") and os.path.isfile(cfg["outro"]) else None
-    tl = Timeline.for_longform(fps, item["cold_open"], rep.keep,
-                               media.probe(sting)["duration"] if sting else CARD_SECONDS["sting"],
-                               media.probe(outro)["duration"] if outro else CARD_SECONDS["outro"],
-                               "sting" if sting else "card:sting", "outro" if outro else "card:outro")
+    tl, rep, sting, outro = plan_timeline(fps, transcript, item, cfg, quiet)
 
     work = tempfile.mkdtemp(prefix="render-", dir=out_dir)
     try:

@@ -176,6 +176,15 @@ def _piece_filter(i, x0, mode, cw, ch, top, W, H):
             f"[bb{i}][ff{i}]overlay=(W-w)/2:(H-h)/2-120,setsar=1,setpts=PTS-STARTPTS[v{i}]")
 
 
+def keep_ranges(transcript, clip, quiet=None):
+    """What the short actually plays: each piece in order, with its pauses tightened. Used by render()
+    and by the full preview, so both always agree."""
+    keep = []
+    for s, e in clip["pieces"]:
+        keep += safe_cuts(transcript, s, e, "short", clip.get("protect", []), quiet).keep
+    return keep
+
+
 def render(video, transcript, clip, out_dir, quiet=None, crop_top=0.125, guest=None):
     """clip: {name, hook, pieces[[a,b]], framing}. Returns {"video": path, ...stats}.
     guest (for the "guest" framing): {name, handle, photo, track} - photo may be None (initials are used)."""
@@ -185,9 +194,7 @@ def render(video, transcript, clip, out_dir, quiet=None, crop_top=0.125, guest=N
         mode = "auto"
     src = media.probe(video)
     W, H = src["width"], src["height"]
-    keep = []
-    for s, e in clip["pieces"]:
-        keep += safe_cuts(transcript, s, e, "short", clip.get("protect", []), quiet).keep
+    keep = keep_ranges(transcript, clip, quiet)
     if mode == "full":
         runs, nfaces = [(a, b, None) for a, b in keep], 0
     else:

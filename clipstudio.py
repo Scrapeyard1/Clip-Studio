@@ -254,6 +254,60 @@ def analyze(d, source, rep=None, threads=None):
     run_step(d, "plan", "Find conversations and shorts", [pj], plan, rep, inputs=[os.path.getsize(tr)])
 
 
+# ---------------- full preview (before rendering) ----------------
+PREVIEW_CHUNK = 90          # long stretches are split so playback starts fast and the next part is ready
+PREVIEW_SPAN = 150          # parts are joined into one file only when they sit this close in the live
+PREVIEW_JOINED = 30         # ...and up to this long, so each joined file is ready within a few seconds
+
+
+def cut_plan(d, item, cfg, source=None):
+    """Exactly what the finished video will play, in order, from the same code the renderer uses.
+    Returns {"total", "chunks": [{"kind", "parts": [[a, b] source seconds] (or "placeholder" for the
+    sting/outro cards), "seconds", "at" (time in the finished video), "label"}]}."""
+    from timeline import Timeline
+    tr = corrected_transcript(d)
+    quiet = load(os.path.join(d, "work"), "quiet.json")
+    fps = media.probe(source)["fps"] if source else 30
+    if item["kind"] == "long":
+        import render_long
+        tl, _, _, _ = render_long.plan_timeline(fps, tr, item, cfg, quiet)
+    else:
+        import render_short
+        tl = Timeline(fps)
+        for a, b in render_short.keep_ranges(tr, item, quiet):
+            tl.add_source("body", a, b)
+    chunks, cold_n = [], 0
+    for seg in tl.segments:
+        at = tl.sec(seg["at_f"])
+        if seg["src"] != "main":
+            name = {"sting": "Sting", "outro": "Patreon outro"}.get(seg["kind"], seg["kind"].title())
+            chunks.append({"kind": seg["kind"], "seconds": round(tl.sec(seg["out_f"] - seg["in_f"]), 3),
+                           "at": round(at, 3), "label": name, "placeholder": seg["src"].startswith("card:")})
+            continue
+        a, b = tl.src_seconds(seg)
+        if seg["kind"] == "cold":
+            cold_n += 1
+        label = f"Cold open, clip {cold_n}" if seg["kind"] == "cold" else (
+            "The conversation" if item["kind"] == "long" else "The short")
+        x = a
+        while x < b - 1e-6:
+            y = min(b, x + PREVIEW_CHUNK)
+            if b - y < 5:
+                y = b
+            last = chunks[-1] if chunks else None
+            # nearby parts (pauses tightened between them) play as one smooth file; far-apart ones don't
+            if (last and last.get("parts") and last["kind"] == seg["kind"] and seg["kind"] != "cold"
+                    and x >= last["parts"][-1][1] and y - last["parts"][0][0] <= PREVIEW_SPAN
+                    and last["seconds"] + (y - x) <= PREVIEW_JOINED):
+                last["parts"].append([round(x, 3), round(y, 3)])
+                last["seconds"] = round(last["seconds"] + y - x, 3)
+            else:
+                chunks.append({"kind": seg["kind"], "parts": [[round(x, 3), round(y, 3)]], "seconds": round(y - x, 3),
+                               "at": round(at + x - a, 3), "label": label})
+            x = y
+    return {"total": round(tl.seconds, 3), "chunks": chunks}
+
+
 # ---------------- stage 2: render selected ----------------
 def outputs_for(d, item):
     dr = os.path.join(d, "drafts")

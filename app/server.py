@@ -529,6 +529,18 @@ def replan(pid: str):
 
 
 # ---------------- review helpers ----------------
+# Previews are MP4/H.264 (plays in Safari and Chrome). CLIPSTUDIO_PREVIEW_FORMAT=webm exists only so
+# automated tests can play them in a browser build without H.264.
+PREVIEW_WEBM = os.environ.get("CLIPSTUDIO_PREVIEW_FORMAT") == "webm"
+
+
+def preview_codec_args():
+    if PREVIEW_WEBM:
+        return ["-c:v", "libvpx-vp9", "-deadline", "realtime", "-cpu-used", "8", "-b:v", "600k",
+                "-c:a", "libopus", "-b:a", "96k", "-f", "webm"], ".webm", "video/webm"
+    return ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-c:a", "aac", "-b:a", "96k",
+            "-movflags", "+faststart", "-f", "mp4"], ".mp4", "video/mp4"
+
 @app.get("/api/projects/{pid}/preview")
 def preview(pid: str, start: float = Query(...), end: float = Query(...)):
     """A small playable clip of the recording, cut on demand (works for MKV sources too)."""
@@ -539,14 +551,42 @@ def preview(pid: str, start: float = Query(...), end: float = Query(...)):
         raise HTTPException(400, "Previews are limited to 10 minutes.")
     cache = os.path.join(d, "work", "previews")
     os.makedirs(cache, exist_ok=True)
-    out = os.path.join(cache, f"{start:.2f}-{end:.2f}.mp4")
+    args, ext, mime = preview_codec_args()
+    out = os.path.join(cache, f"{start:.2f}-{end:.2f}{ext}")
     if not media.valid_media(out, min_seconds=0.3):
-        tmp = media.tmp_name(out) + f".{uuid.uuid4().hex[:6]}.mp4"
+        tmp = out + f".{uuid.uuid4().hex[:6]}.partial"
         media.run([paths.ffmpeg(), "-y", "-ss", f"{start:.3f}", "-t", f"{end - start:.3f}", "-i", src,
-                   "-vf", "scale=-2:360", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
-                   "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", tmp])
+                   "-vf", "scale=-2:360", *args, tmp])
         os.replace(tmp, out)
-    return FileResponse(out, media_type="video/mp4")
+    return FileResponse(out, media_type=mime)
+
+
+@app.get("/api/projects/{pid}/cutclip")
+def cutclip(pid: str, p: str = Query(...)):
+    """Several nearby parts of the recording joined into one small playable file, pauses already
+    removed: one piece of the full preview. p = "a-b,a-b,..." in source seconds, in order."""
+    import hashlib
+    d = pdir(pid)
+    try:
+        parts = [[float(x) for x in pair.split("-")] for pair in p.split(",") if pair]
+    except ValueError:
+        raise HTTPException(400, "Bad preview request")
+    if not parts or len(parts) > 80 or any(b <= a or a < 0 for a, b in parts) or \
+            any(parts[i][0] < parts[i - 1][1] - 1e-3 for i in range(1, len(parts))) or parts[-1][1] - parts[0][0] > 200:
+        raise HTTPException(400, "Bad preview request")
+    cache = os.path.join(d, "work", "previews")
+    os.makedirs(cache, exist_ok=True)
+    args, ext, mime = preview_codec_args()
+    out = os.path.join(cache, "cut-" + hashlib.sha1(p.encode()).hexdigest()[:16] + ext)
+    if not media.valid_media(out, min_seconds=0.1):
+        t0 = parts[0][0]
+        keep = "+".join(f"between(t,{a - t0:.3f},{b - t0:.3f})" for a, b in parts)
+        tmp = out + f".{uuid.uuid4().hex[:6]}.partial"
+        media.run([paths.ffmpeg(), "-y", "-ss", f"{t0:.3f}", "-t", f"{parts[-1][1] - t0:.3f}", "-i", load(pid)["source"],
+                   "-vf", f"select='{keep}',setpts=N/FRAME_RATE/TB,scale=-2:360",
+                   "-af", f"aselect='{keep}',asetpts=N/SR/TB", *args, tmp])
+        os.replace(tmp, out)
+    return FileResponse(out, media_type=mime)
 
 
 @app.get("/api/projects/{pid}/transcript")
@@ -571,6 +611,18 @@ def frame(pid: str, t: float = Query(...), w: int = Query(480)):
         except Exception:
             raise HTTPException(404, "Couldn't read a picture at that time.")
     return FileResponse(out, media_type="image/jpeg")
+
+
+@app.get("/api/projects/{pid}/items/{iid}/cut")
+def item_cut(pid: str, iid: str):
+    """The full preview: everything this item will play, in order, before it's rendered."""
+    d = pdir(pid)
+    item = next((i for i in view(pid)["items"] if i["id"] == iid), None)
+    if not item:
+        raise HTTPException(404, "No conversation or short with that id")
+    if item["kind"] == "short" and not item.get("pieces"):
+        raise HTTPException(400, "This short has no clips yet.")
+    return pipeline.cut_plan(d, item, render_cfg(), load(pid)["source"])
 
 
 # ---------------- chat editor ----------------

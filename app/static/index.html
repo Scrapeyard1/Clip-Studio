@@ -191,6 +191,35 @@ select { background: var(--night); border: 1px solid var(--rule); border-radius:
 .drawer .ctx p.in { color: var(--paper); }
 .drawer .ctx time { color: var(--gold); margin-right: 6px; font-variant-numeric: tabular-nums; }
 
+/* full preview player */
+.pv[open] { position: fixed; inset: 0; margin: auto; height: fit-content; max-height: 94vh; overflow: auto; z-index: 11;
+  width: min(980px, 94vw); padding: 18px 20px 16px; box-shadow: 0 20px 70px rgba(0,0,0,.65); }
+body.chat-open .pv[open] { right: 400px; width: min(900px, calc(100vw - 440px)); }
+.pvh { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 12px; }
+.pvh strong { font: 400 26px/1.1 "Anton", sans-serif; letter-spacing: .3px; display: block; }
+.pvh small { color: var(--mist); }
+.pvstage { aspect-ratio: 16/9; cursor: default; }
+.pvstage video { position: absolute; inset: 0; }
+.pvstage video[hidden] { display: none; }
+.slate { position: absolute; inset: 0; z-index: 1; display: grid; place-items: center; text-align: center; background: #0B111B; padding: 20px; }
+.slate[hidden] { display: none; }
+.slate b { font: 400 clamp(28px, 5vw, 54px)/1 "Anton", sans-serif; color: var(--paper); display: block; }
+.slate small { color: var(--mist); display: block; margin-top: 10px; }
+.pvwait { position: absolute; z-index: 1; right: 12px; bottom: 12px; background: rgba(13,20,32,.85); padding: 5px 10px; border-radius: 4px; font-size: 13px; }
+.pvwait[hidden] { display: none; }
+.pvbar { position: relative; height: 30px; margin-top: 12px; cursor: pointer; border-radius: 4px; overflow: hidden; background: var(--night); }
+.pvbar .blk { position: absolute; top: 0; bottom: 0; background: var(--deck-2); border-right: 1px solid var(--night); }
+.pvbar .blk.cold { background: #5C4A12; }
+.pvbar .blk.card { background: repeating-linear-gradient(45deg, #26344C 0 6px, #1A263B 6px 12px); }
+.pvbar .cut { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(240,68,75,.7); }
+.pvbar .pvhead { position: absolute; top: -2px; bottom: -2px; width: 3px; background: var(--gold); box-shadow: 0 0 0 1px #000; pointer-events: none; }
+.pvctl { display: flex; gap: 14px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+.pvtime { font: 400 20px/1 "Anton", sans-serif; font-variant-numeric: tabular-nums; letter-spacing: .4px; }
+.pvnow { color: var(--mist); font-size: 14px; }
+.pvkey { display: flex; gap: 14px; flex-wrap: wrap; color: var(--mist); font-size: 12px; margin-top: 8px; }
+.pvkey i { display: inline-block; width: 12px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.pvnote { color: var(--mist); font-size: 13px; margin: 10px 0 0; }
+
 /* chat editor */
 .chat { position: fixed; top: 0; right: 0; bottom: 0; width: 400px; background: var(--deck); border-left: 1px solid var(--rule); z-index: 12; display: flex; flex-direction: column; }
 .chat[hidden] { display: none; }
@@ -276,10 +305,22 @@ dialog::backdrop { background: rgba(5, 9, 16, .7); }
 </section>
 
 <section class="drawer" id="drawer" hidden aria-label="Preview">
-  <div class="dh"><strong id="drawer-title">Preview</strong><button class="btn small" id="drawer-close">Close</button></div>
+  <div class="dh"><strong id="drawer-title">Preview</strong><span style="display:flex;gap:6px"><button class="btn small" id="drawer-around"></button><button class="btn small" id="drawer-close">Close</button></span></div>
   <div class="upcoming" style="cursor:default"><span class="tag">Preview</span><video id="drawer-video" controls playsinline></video></div>
   <div class="ctx" id="drawer-ctx"></div>
 </section>
+
+<dialog id="pv" class="pv" aria-labelledby="pv-title">
+  <div class="pvh"><div><strong id="pv-title">Full preview</strong><small id="pv-sub"></small></div>
+    <button class="btn small" id="pv-close">Close</button></div>
+  <div class="upcoming pvstage"><span class="tag">Preview</span>
+    <video id="pv-a" playsinline preload="auto"></video><video id="pv-b" playsinline preload="auto" hidden></video>
+    <div class="slate" id="pv-slate" hidden></div><div class="pvwait" id="pv-wait" hidden>Getting this part ready…</div></div>
+  <div class="pvbar" id="pv-bar" role="slider" aria-label="Position in the preview" tabindex="0"><div id="pv-segs"></div><i class="pvhead" id="pv-head"></i></div>
+  <div class="pvkey"><span><i style="background:#5C4A12"></i>Cold open</span><span><i style="background:repeating-linear-gradient(45deg,#26344C 0 3px,#1A263B 3px 6px)"></i>Sting / outro</span><span><i style="background:var(--deck-2)"></i>Conversation</span><span><i style="background:rgba(240,68,75,.7);width:2px"></i>A trimmed pause</span></div>
+  <div class="pvctl"><button class="btn primary" id="pv-play">Play</button><span class="pvtime" id="pv-time">0:00 / 0:00</span><span class="pvnow" id="pv-now"></span></div>
+  <p class="pvnote" id="pv-note"></p>
+</dialog>
 
 <dialog id="dlg" aria-labelledby="dlg-h">
   <h2 id="dlg-h">Add a recording</h2>
@@ -463,10 +504,10 @@ function body() {
   const longs = P.items.filter(i => i.kind === "long"), shorts = P.items.filter(i => i.kind === "short");
   return `${liveMap(longs)}
     <section class="section"><h2>Conversations</h2>
-      <p>Check where each conversation starts and ends, and the clips for its cold open. "Hear it" plays ${CONTEXT} seconds before and after. Untick anything you don't want rendered.</p>
+      <p>Check where each conversation starts and ends, and the clips for its cold open. "Hear it" plays exactly that clip (you can add ${CONTEXT} seconds around it). "Preview" plays the whole video as it will be cut. Untick anything you don't want rendered.</p>
       ${longs.map(longCard).join("")}</section>
     <section class="section"><h2>Shorts</h2>
-      <p>Hear each clip in context before including it. Framing: Auto follows your face and switches to the full frame for Scripture on screen.</p>
+      <p>"Preview" plays the whole short as it will be cut. Framing: Auto follows your face and switches to the full frame for Scripture on screen.</p>
       ${shorts.map(shortCard).join("")}</section>
     <section class="section" id="terms"><h2>Names and terms</h2>
       <p>Fix what the transcription gets wrong, one per line as <code>wrong => right</code>. Used for captions, titles and chapters. Changing these marks rendered videos as needing a re-render.</p>
@@ -492,7 +533,7 @@ function liveMap(longs) {
 /* a greyed still of the source with an "Upcoming" tag: what this will be, before it's rendered */
 function upcomingTile(t, a, b, label, caption) {
   const src = `/api/projects/${encodeURIComponent(P.id)}/frame?t=${(+t).toFixed(1)}&w=640`;
-  return `<button class="upcoming" data-hear="${a}|${b}" aria-label="Preview ${esc(label)}">
+  return `<button class="upcoming" data-full aria-label="Full preview of ${esc(label)}">
     <img src="${src}" alt="" loading="lazy"><span class="tag">Upcoming</span>
     <span class="play"><span>▶</span></span><span class="cap">${esc(caption)}</span></button>`;
 }
@@ -559,12 +600,12 @@ function longCard(c) {
       <label class="include"><input type="checkbox" data-select ${c.selected ? "checked" : ""}> Render</label>
       <div class="name"><input class="guest" value="${esc(c.guest)}" aria-label="Guest name" data-text="guest">
         <input class="topic" value="${esc(c.topic)}" aria-label="Topic" data-text="topic"></div>
-      <div class="chips">${c.rank ? `<span class="chip rank">${esc(c.rank.toLowerCase())}</span>` : ""}${stateChip(c)}<button class="btn small" data-chat>Tell the editor</button></div>
+      <div class="chips">${c.rank ? `<span class="chip rank">${esc(c.rank.toLowerCase())}</span>` : ""}${stateChip(c)}<button class="btn small" data-full>Preview</button><button class="btn small" data-chat>Tell the editor</button></div>
     </div>
     ${c.problems.length ? `<ul class="problems-list">${c.problems.map(p => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
     ${c.render === "stale" && files.video ? `<p class="stale-note">You changed this after it was rendered. Render it again to update the video, captions and editor timeline.</p>` : ""}
     ${files.video ? "" : `<div class="prep">${(() => { const k = (c.cold_open || [])[0] || [c.start, c.start + 20];
-        return upcomingTile(k[0] + 0.5, k[0], k[1], c.guest, "Not rendered yet · plays the first cold-open clip"); })()}`}
+        return upcomingTile(k[0] + 0.5, k[0], k[1], c.guest, "Not rendered yet · watch the full preview"); })()}`}
     <div class="times">
       <div><div class="lab">Conversation <small>${short(c.end - c.start)} long</small></div>
         <div class="clip-row" data-field="span"><input class="tin" data-part="0" value="${fmt(c.start)}" aria-label="Starts"> to
@@ -589,13 +630,13 @@ function shortCard(s) {
       <label class="include"><input type="checkbox" data-select ${s.selected ? "checked" : ""}> Render</label>
       <div class="name"><input class="guest" value="${esc(s.hook)}" aria-label="Hook text" data-text="hook">
         <div style="color:var(--mist);font-size:14px">${esc(s.why || "")}</div></div>
-      <div class="chips">${stateChip(s)}<button class="btn small" data-chat>Tell the editor</button></div>
+      <div class="chips">${stateChip(s)}<button class="btn small" data-full>Preview</button><button class="btn small" data-chat>Tell the editor</button></div>
     </div>
     ${s.problems.length ? `<ul class="problems-list">${s.problems.map(p => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
     ${(s.issues || []).length ? `<ul class="problems-list" style="color:var(--gold)">${s.issues.map(p => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
     <div class="short-grid">
       ${files.video ? `<video controls preload="metadata" src="${m(files.video)}"></video>`
-        : (s.pieces || []).length ? upcomingTile(s.pieces[0][0] + 0.5, s.pieces[0][0], s.pieces[0][1], s.hook, "Not rendered yet")
+        : (s.pieces || []).length ? upcomingTile(s.pieces[0][0] + 0.5, s.pieces[0][0], s.pieces[0][1], s.hook, "Not rendered yet · watch the full preview")
         : `<div class="vert-ph">No clips yet</div>`}
       <div>
         <div class="field"><div class="lab">Clips, played in order <small>${len.toFixed(0)} s before pauses are tightened</small></div>
@@ -742,20 +783,26 @@ function wireCard(card) {
   };
   const ap = $("[data-approve]", card); if (ap) ap.onclick = () => patch(id, { approved: !item().approved });
   const ch = $("[data-chat]", card); if (ch) ch.onclick = () => openChat(id);
+  $$("[data-full]", card).forEach(b => b.onclick = () => fullPreview(id));
 }
 
 /* preview drawer: the moment plus context, with the words around it */
+let hearAround = false, lastHear = null;
 async function hear(a, b, label) {
-  const s = Math.max(0, a - CONTEXT), e = b + CONTEXT;
+  lastHear = [a, b, label];
+  const s = hearAround ? Math.max(0, a - CONTEXT) : a, e = hearAround ? b + CONTEXT : b;
   const d = $("#drawer"), v = $("#drawer-video");
   playerStart = s; showChatCtx();
-  $("#drawer-title").textContent = `${label ? label + ": " : ""}${fmt(a)} to ${fmt(b)}`;
+  $("#drawer-around").textContent = hearAround ? "Just the clip" : `Add ${CONTEXT} s around it`;
+  $("#drawer-title").textContent = `${label ? label + ": " : ""}${fmt(a)} to ${fmt(b)} (${(b - a).toFixed(1)} s)`;
   d.hidden = false;
   v.src = `/api/projects/${encodeURIComponent(P.id)}/preview?start=${s.toFixed(2)}&end=${e.toFixed(2)}`;
   v.play().catch(() => {});
-  const lines = await api(`/api/projects/${encodeURIComponent(P.id)}/transcript?start=${s}&end=${e}`);
+  const lines = await api(`/api/projects/${encodeURIComponent(P.id)}/transcript?start=${Math.max(0, a - CONTEXT)}&end=${b + CONTEXT}`);
   $("#drawer-ctx").innerHTML = lines.map(l => `<p class="${l.end > a && l.start < b ? "in" : ""}"><time>${fmt(l.start)}</time>${esc(l.text)}</p>`).join("")
-    + `<p style="margin-top:6px">Plays ${CONTEXT} seconds before and after. Brighter lines are inside the clip.</p>`;
+    + `<p style="margin-top:6px">${hearAround ? `Plays ${CONTEXT} seconds before and after the clip.` : "Plays exactly this clip."} Brighter lines are inside the clip.</p>`;
+}
+$("#drawer-around").onclick = () => { hearAround = !hearAround; if (lastHear) hear(...lastHear);
 }
 $("#drawer-close").onclick = () => { const v = $("#drawer-video"); v.pause(); v.removeAttribute("src"); v.load(); $("#drawer").hidden = true; playerStart = null; showChatCtx(); };
 $("#drawer-video").ontimeupdate = () => showChatCtx();
@@ -826,10 +873,136 @@ $("#sform").onsubmit = async e => {
   catch (x) { $("#serr").textContent = x.message; }
 };
 
+/* full preview: the whole video as it will be cut, played part by part (pauses already trimmed) */
+const pvDlg = $("#pv"), PV = { cut: null, i: 0, playing: false, front: 0, raf: null, cardT0: 0, cardAt: 0, item: null };
+const pvVids = [$("#pv-a"), $("#pv-b")];
+const frontV = () => pvVids[PV.front], backV = () => pvVids[1 - PV.front];
+const chunkUrl = c => `/api/projects/${encodeURIComponent(P.id)}/cutclip?p=${c.parts.map(([a, b]) => `${a}-${b}`).join(",")}`;
+function pvPos(t) {
+  const tot = PV.cut.total;
+  $("#pv-head").style.left = `calc(${(100 * Math.min(t, tot) / tot).toFixed(3)}% - 1px)`;
+  $("#pv-time").textContent = `${short(t)} / ${short(tot)}`;
+  PV.at = t;
+}
+function pvLabel(c) {
+  const n = PV.cut.chunks.filter(x => x.parts).length;
+  $("#pv-now").textContent = c.parts ? `${c.label} · from ${fmt(c.parts[0][0])} in the live${c.parts.length > 1 ? ` · ${c.parts.length - 1} pause${c.parts.length > 2 ? "s" : ""} trimmed here` : ""}`
+    : c.placeholder ? `${c.label} · placeholder until you set the file in Settings` : c.label;
+}
+function pvPrep(v, i) {
+  const c = PV.cut.chunks[i];
+  if (!c || !c.parts || v.dataset.i === String(i)) return;
+  v.dataset.i = i; v.src = chunkUrl(c); v.load();
+}
+function pvNextPlayable(i) { let j = i + 1; while (j < PV.cut.chunks.length && !PV.cut.chunks[j].parts) j++; return j; }
+function pvPrefetch(i) {
+  const j = pvNextPlayable(i);
+  if (j < PV.cut.chunks.length) pvPrep(backV(), j);
+  const k = pvNextPlayable(j);
+  if (k < PV.cut.chunks.length) fetch(chunkUrl(PV.cut.chunks[k])).catch(() => {});   // get the one after ready too
+}
+function pvStop() { cancelAnimationFrame(PV.raf); pvVids.forEach(v => v.pause()); }
+function pvPlayChunk(i, offset) {
+  pvStop();
+  const c = PV.cut.chunks[i];
+  if (!c) { PV.playing = false; $("#pv-play").textContent = "Play again"; PV.i = 0; return; }
+  PV.i = i; pvLabel(c);
+  if (!c.parts) {                                     // sting / outro: a card for its real length
+    pvVids.forEach(v => v.hidden = true);
+    $("#pv-slate").hidden = false;
+    $("#pv-slate").innerHTML = `<div><b>${esc(c.label)}</b><small>${c.placeholder ? `Your ${esc(c.label.toLowerCase())} plays here (${c.seconds.toFixed(1)} s). Set its file in Settings.` : `${c.seconds.toFixed(1)} s`}</small></div>`;
+    PV.cardAt = offset;
+    const t0 = performance.now() - offset * 1000;
+    const tick = () => {
+      const el = (performance.now() - t0) / 1000;
+      PV.cardAt = el; pvPos(c.at + Math.min(el, c.seconds));
+      if (!PV.playing) return;
+      if (el >= c.seconds) return pvPlayChunk(i + 1, 0);
+      PV.raf = requestAnimationFrame(tick);
+    };
+    pvPos(c.at + offset);
+    if (PV.playing) PV.raf = requestAnimationFrame(tick);
+    pvPrefetch(i);
+    return;
+  }
+  $("#pv-slate").hidden = true;
+  if (backV().dataset.i === String(i)) PV.front = 1 - PV.front;   // the next part is already loaded
+  const v = frontV();
+  pvPrep(v, i);
+  v.hidden = false; backV().hidden = true;
+  $("#pv-wait").hidden = v.readyState >= 3;              // say so while the part is still being made
+  const go = () => { try { v.currentTime = offset; } catch (_) {} if (PV.playing) v.play().catch(() => {}); };
+  if (v.readyState >= 1) go(); else v.addEventListener("loadedmetadata", go, { once: true });
+  pvPos(c.at + offset);
+  pvPrefetch(i);
+}
+pvVids.forEach(v => {
+  v.ontimeupdate = () => { if (v === frontV() && PV.cut) { pvPos(PV.cut.chunks[PV.i].at + v.currentTime); showChatCtx(); } };
+  v.onended = () => { if (v === frontV() && PV.playing) pvPlayChunk(PV.i + 1, 0); };
+  v.onwaiting = () => { if (v === frontV()) $("#pv-wait").hidden = false; };
+  v.onloadstart = () => { if (v === frontV()) $("#pv-wait").hidden = false; };
+  v.onplaying = () => { if (v === frontV()) $("#pv-wait").hidden = true; };
+  v.oncanplay = () => { if (v === frontV()) $("#pv-wait").hidden = true; };
+});
+$("#pv-play").onclick = () => {
+  if (!PV.cut) return;
+  const c = PV.cut.chunks[PV.i];
+  if ($("#pv-play").textContent === "Play again") { PV.playing = true; $("#pv-play").textContent = "Pause"; return pvPlayChunk(0, 0); }
+  PV.playing = !PV.playing;
+  $("#pv-play").textContent = PV.playing ? "Pause" : "Play";
+  if (!c.parts) return pvPlayChunk(PV.i, PV.playing ? PV.cardAt : PV.cardAt);
+  PV.playing ? frontV().play().catch(() => {}) : frontV().pause();
+};
+function pvSeek(t) {
+  const ch = PV.cut.chunks;
+  let i = ch.findIndex(c => t >= c.at && t < c.at + c.seconds);
+  if (i < 0) i = ch.length - 1;
+  pvPlayChunk(i, Math.max(0, t - ch[i].at));
+}
+$("#pv-bar").onclick = e => { if (!PV.cut) return; const r = e.currentTarget.getBoundingClientRect(); pvSeek(PV.cut.total * (e.clientX - r.left) / r.width); };
+$("#pv-bar").onkeydown = e => { if (!PV.cut) return; if (e.key === "ArrowRight") pvSeek(Math.min(PV.cut.total - .1, (PV.at || 0) + 10)); if (e.key === "ArrowLeft") pvSeek(Math.max(0, (PV.at || 0) - 10)); };
+function pvClose() { pvStop(); PV.playing = false; pvVids.forEach(v => { v.removeAttribute("src"); v.dataset.i = ""; v.load(); }); PV.cut = null; pvDlg.close(); showChatCtx(); }
+$("#pv-close").onclick = pvClose;
+document.addEventListener("keydown", e => { if (e.key === "Escape" && pvDlg.open) pvClose(); });
+async function fullPreview(id) {
+  const it = P.items.find(i => i.id === id);
+  if (pvDlg.open) pvClose();
+  PV.item = it;
+  $("#pv-title").textContent = it.kind === "long" ? it.guest : it.hook;
+  $("#pv-sub").textContent = "Working out the cut…";
+  $("#pv-segs").innerHTML = ""; $("#pv-slate").hidden = true; $("#pv-now").textContent = "";
+  $("#pv-note").textContent = it.kind === "long"
+    ? "This is the finished video's cut from your recording: cold open, sting, the conversation with pauses trimmed, then the outro. Titles and thumbnails come with the render."
+    : "This is the short's cut from your recording, in order, with pauses tightened. The vertical framing, captions and hook text are added when it's rendered.";
+  pvDlg.show();
+  try { PV.cut = await api(`/api/projects/${encodeURIComponent(P.id)}/items/${encodeURIComponent(id)}/cut`); }
+  catch (x) { $("#pv-sub").textContent = x.message; return; }
+  const tot = PV.cut.total, pct = t => (100 * t / tot).toFixed(3) + "%";
+  const parts = PV.cut.chunks.filter(c => c.parts), cuts = [];
+  PV.cut.chunks.forEach(c => { if (!c.parts) return; let t = c.at; c.parts.forEach((p, k) => { if (k) cuts.push(t); t += p[1] - p[0]; }); });
+  const nPauses = cuts.length + Math.max(0, PV.cut.chunks.filter(c => c.kind === "body").length - 1) * 0;
+  $("#pv-sub").textContent = ` ${short(tot)} long${it.kind === "long" ? "" : ""} · ${parts.length} part${parts.length === 1 ? "" : "s"}`;
+  $("#pv-segs").innerHTML = PV.cut.chunks.map(c => `<span class="blk ${c.parts ? c.kind : "card"}" style="left:${pct(c.at)};width:${pct(c.seconds)}" title="${esc(c.label)}"></span>`).join("")
+    + cuts.map(t => `<span class="cut" style="left:${pct(t)}"></span>`).join("");
+  PV.playing = true; PV.front = 0; $("#pv-play").textContent = "Pause";
+  pvPlayChunk(0, 0);
+}
+/* where the full preview is, in source time (for "here" in the chat) */
+function pvSourceAt() {
+  if (!pvDlg.open || !PV.cut) return null;
+  const c = PV.cut.chunks[PV.i];
+  if (!c || !c.parts) return null;
+  let off = (PV.at || c.at) - c.at;
+  for (const [a, b] of c.parts) { if (off <= b - a) return a + off; off -= b - a; }
+  return c.parts[c.parts.length - 1][1];
+}
+
 /* chat editor */
 let chatFocus = null, playerStart = null, chatBusy = false;
 const chatEl = $("#chat");
 function playerAt() {
+  const fp = pvSourceAt();
+  if (fp != null) return fp;
   const v = $("#drawer-video");
   return playerStart != null && !$("#drawer").hidden ? playerStart + (v.currentTime || 0) : null;
 }

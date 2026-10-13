@@ -69,8 +69,16 @@ Rules live in `projects/_style/rules.json`; chats in each project's `chat.json`.
 
 Uploads show a percentage, size and time left. Right after a recording is added you get a picture of
 it and a filmstrip across the whole live, with an overall percentage and time left while it's analyzed
-(transcription is most of the bar). Anything not rendered yet is shown greyed with an "Upcoming" tag;
-click it to hear that moment. Finished renders play in full color.
+(transcription is most of the bar). Anything not rendered yet is shown greyed with an "Upcoming" tag.
+Finished renders play in full color.
+
+**Preview** (on every conversation and short, or click its "Upcoming" picture) plays the whole video as
+it will be cut, before you render: cold-open clips, the sting, the conversation with every trimmed pause
+already removed, then the outro; for shorts, every piece in order with pauses tightened. It's built
+from the same code as the render, so the length matches to the frame. The bar under it shows each part
+and a red tick at every trimmed pause; click anywhere to jump. Parts are made on the fly at 360p a few
+seconds ahead of where you're watching. Framing, captions and titles come with the real render.
+**Hear it** plays exactly that clip; "Add 10 s around it" plays the context too.
 
 ## Your edits are kept separate
 

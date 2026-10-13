@@ -498,3 +498,58 @@ def test_chat_needs_a_key_and_a_message(app_client, tmp_path, monkeypatch):
 def test_render_bar_can_actually_hide():
     css = open(os.path.join(ROOT, "app", "static", "index.html"), encoding="utf-8").read()
     assert ".renderbar[hidden] { display: none; }" in css      # .renderbar's display:flex was beating [hidden]
+
+
+# ---------- full preview ----------
+def _cut_project(server, tmp_path):
+    src = make_video(str(tmp_path / "live.mp4"), 120, rate="30")
+    pid = server.new_project("Preview test", source=src)
+    d = server.pdir(pid)
+    os.makedirs(os.path.join(d, "work"), exist_ok=True)
+    segs = [{"start": s, "end": s + 4, "text": "words here", "words": [{"w": "words", "s": s, "e": s + 1.5},
+                                                                     {"w": "here", "s": s + 2, "e": s + 3.9}]}
+            for s in range(0, 114, 6)]                       # 2.1 s pauses between lines get trimmed
+    media.write_json(os.path.join(d, "work", "transcript.json"), {"duration": 120, "segments": segs})
+    media.write_json(os.path.join(d, "work", "quiet.json"), [[s + 3.95, s + 5.95] for s in range(0, 114, 6)])
+    media.write_json(os.path.join(d, "work", "plan.json"), {"conversations": [
+        {"id": "c0", "guest": "Ana", "topic": "t", "start": 0, "end": 119, "cold_open": [[90, 94], [60, 64]]}],
+        "shorts": [{"id": "s20", "hook": "h", "pieces": [[20, 54], [100, 109]], "framing": "auto"}]})
+    return pid, d, src
+
+
+def test_full_preview_is_exactly_what_renders(app_client, tmp_path):
+    import render_long
+    from timeline import Timeline
+    server, client = app_client
+    pid, d, src = _cut_project(server, tmp_path)
+    long_cut = client.get(f"/api/projects/{pid}/items/c0/cut").json()
+    item = next(i for i in pipeline.effective_items(d)[0] if i["id"] == "c0")
+    tl, rep, _, _ = render_long.plan_timeline(media.probe(src)["fps"], pipeline.corrected_transcript(d), item, {},
+                                              pipeline.load(os.path.join(d, "work"), "quiet.json"))
+    assert rep.removed                                                             # pauses really were trimmed
+    assert abs(long_cut["total"] - tl.seconds) < 1e-3                             # same to the millisecond
+    ch = long_cut["chunks"]
+    assert [c["kind"] for c in ch[:3]] == ["cold", "cold", "sting"] and ch[-1]["kind"] == "outro"
+    assert ch[0]["parts"] == [[90.0, 94.0]] and ch[1]["parts"] == [[60.0, 64.0]]   # cold open order kept
+    assert abs(sum(c["seconds"] for c in ch) - long_cut["total"]) < 0.02          # rounding only
+    for a, b in zip(ch, ch[1:]):                                                   # back to back, no gaps
+        assert abs(a["at"] + a["seconds"] - b["at"]) < 0.02
+    assert all(c["seconds"] <= pipeline.PREVIEW_JOINED + 1e-6 for c in ch if c.get("parts") and len(c["parts"]) > 1)
+    short_cut = client.get(f"/api/projects/{pid}/items/s20/cut").json()
+    joined = [p for c in short_cut["chunks"] for p in c["parts"]]
+    assert joined[0][0] == 20 and joined[-1][1] == 109 and len(joined) > 2       # pauses tightened inside
+    assert not any(a < 100 and b > 54 for a, b in joined)                        # the gap between pieces stays cut
+
+
+def test_preview_clip_is_the_length_it_says(app_client, tmp_path):
+    server, client = app_client
+    pid, d, src = _cut_project(server, tmp_path)
+    r = client.get(f"/api/projects/{pid}/cutclip", params={"p": "10-14,20-23.5"})
+    assert r.status_code == 200
+    f = str(tmp_path / "c.mp4"); open(f, "wb").write(r.content)
+    assert abs(media.probe(f)["duration"] - 7.5) < 0.15
+    r = client.get(f"/api/projects/{pid}/preview", params={"start": 30, "end": 33.8})
+    f2 = str(tmp_path / "p.mp4"); open(f2, "wb").write(r.content)
+    assert abs(media.probe(f2)["duration"] - 3.8) < 0.15                        # exactly the clip, no padding
+    for bad in ("20-10", "10-14,12-16", "0-300", "x-y"):
+        assert client.get(f"/api/projects/{pid}/cutclip", params={"p": bad}).status_code == 400
