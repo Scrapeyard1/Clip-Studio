@@ -1,0 +1,63 @@
+CLIP STUDIO: HOW TO SET IT UP
+=============================
+
+Clip Studio turns a recorded live into conversation videos, shorts, captions, titles and a
+timeline you can open in DaVinci Resolve or Premiere. Everything runs on your own computer.
+
+
+ON A MAC
+--------
+1. Put this folder somewhere you'll keep it, like Documents. (Not Downloads: it gets cleaned out.)
+
+2. Double-click "Install Clip Studio (Mac)".
+   - A Terminal window opens and does the setup. It takes about 20 minutes, mostly downloading.
+   - If it asks for your Mac password, type it and press Return. Nothing shows while you type;
+     that's normal.
+   - If it asks you to press Return to continue, press Return.
+   - Wait until it says "Done".
+
+3. Double-click "Open Clip Studio (Mac)". Clip Studio opens in your web browser.
+   Keep the Terminal window open while you use it. Closing that window stops Clip Studio.
+
+4. The first time: click Settings (bottom left) and paste the Claude API key Elijah gives you.
+
+From then on, just double-click "Open Clip Studio (Mac)".
+
+
+IF THE MAC WON'T OPEN THE FILE
+------------------------------
+Macs block files downloaded from the internet the first time. If you see "can't be opened" or
+"Apple could not verify":
+  - Click Done (not Move to Trash).
+  - Open System Settings > Privacy & Security, scroll down, and click "Open Anyway" next to the
+    file's name. Confirm with your password.
+  - Double-click the file again.
+You only need to do this once per file.
+
+If double-clicking opens the file as text instead of running it: open the Terminal app, type
+  bash
+followed by a space, drag the file into the Terminal window, and press Return.
+
+
+ON WINDOWS
+----------
+Double-click "Install Clip Studio (Windows)", wait until it says Done, then double-click
+"Open Clip Studio (Windows)". If Windows shows "Windows protected your PC", click
+"More info" and then "Run anyway".
+
+
+USING IT
+--------
+- "Add a recording" and drop in the live's video file (MP4, MOV or MKV).
+- It shows a picture of the video and a progress bar with the time left while it transcribes.
+- When it's done, review the conversations and shorts it found. "Preview" plays any of them
+  exactly as it will be cut. "Tell the editor" lets you ask for changes in plain words.
+- Tick what you want and press Render.
+- "Open in DaVinci Resolve or Premiere" downloads the timeline. In Resolve:
+  File > Import > Timeline, and point it to the original recording when it asks.
+
+
+IF SOMETHING GOES WRONG
+-----------------------
+The installer saves everything it did in "install-log.txt" in this folder. Send that file, or a
+screenshot of the window, to Elijah.

@@ -52,6 +52,9 @@ async def lifespan(_app):
     start_worker()
     for c in [c for c in health()["checks"] if not c["ok"]]:
         print(f"[setup] {c['item']}: missing. {c['fix']}")
+    if os.environ.get("CLIPSTUDIO_OPEN_BROWSER"):      # only when started as the app, once it's ready
+        port = os.environ.get("PORT", "8765")
+        threading.Timer(0.3, lambda: webbrowser.open(f"http://localhost:{port}")).start()
     yield
 
 
@@ -759,5 +762,6 @@ def start_worker():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8765))
     if not os.environ.get("NO_BROWSER"):
-        threading.Timer(1.2, lambda: webbrowser.open(f"http://localhost:{port}")).start()
+        os.environ["CLIPSTUDIO_OPEN_BROWSER"] = "1"
+    print(f"Clip Studio is running at http://localhost:{port}  (keep this window open; close it to stop)")
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")

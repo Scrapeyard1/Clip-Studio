@@ -4,7 +4,20 @@ Turns a recorded live into review-ready drafts: one long-form video per guest
 conversation, vertical shorts, captions, titles, descriptions, chapters,
 thumbnails, and a timeline your editor opens in DaVinci Resolve or Premiere Pro.
 
-## Setup (Mac or Windows, one time)
+## Easiest setup: double-click
+
+Download the folder (GitHub: Code > Download ZIP), unzip it somewhere permanent, then:
+
+- **Mac:** double-click `Install Clip Studio (Mac).command` once (about 20 minutes), then
+  `Open Clip Studio (Mac).command` whenever you want to use it.
+- **Windows:** `Install Clip Studio (Windows).bat` once, then `Open Clip Studio (Windows).bat`.
+
+`START HERE.txt` walks a non-technical person through it, including what to do when macOS blocks a
+downloaded file. The installers install Homebrew/winget packages (Python 3.12, FFmpeg), make a private
+Python folder (`.venv`) inside the Clip Studio folder, download the models, and run the setup check.
+Each copy of Clip Studio keeps its own projects; copies don't sync with each other.
+
+## Setup by hand (Mac or Windows, one time)
 
 1. Install Python 3.11+ and FFmpeg.
    Mac: `brew install ffmpeg python`. Windows: `winget install ffmpeg Python.Python.3.12`.

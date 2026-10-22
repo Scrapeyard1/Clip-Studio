@@ -7,3 +7,5 @@ deliver/
 __pycache__/
 *.pyc
 .DS_Store
+.venv/
+install-log.txt
