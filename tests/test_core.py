@@ -699,3 +699,103 @@ def test_long_cold_opens_are_sent_back(monkeypatch):
     monkeypatch.setattr(claude_api, "ask", fake_ask)
     out = moments._clips_for(TALK, {"guest": "A", "start": 95, "end": 200}, None)
     assert "60 s" in asked[1] and out["cold_open"][0]["start"] == 104
+
+
+# ---------- refresh & update ----------
+def _fake_release(files):
+    """A ZIP shaped like GitHub's download: everything inside one top folder."""
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for name, text in files.items():
+            z.writestr("Clip-Studio-main/" + name, text)
+    return buf.getvalue()
+
+
+def _old_copy(root):
+    files = {"app/server.py": "old server", "engine/old_module.py": "gone in the new version",
+             "engine/version.txt": "aaa 2026-10-01T00:00:00Z", "requirements.txt": "fastapi\n",
+             "Open Clip Studio (Mac).command": "launcher", "projects/oct1/project.json": "my live",
+             "projects/settings.json": '{"anthropic_api_key": "kept"}', "models/m.onnx": "model",
+             ".venv/bin/python": "python", "install-log.txt": "log", "assets/fonts/Downloaded.ttf": "font"}
+    for name, text in files.items():
+        os.makedirs(os.path.dirname(os.path.join(root, name)), exist_ok=True)
+        open(os.path.join(root, name), "w").write(text)
+
+
+def test_update_keeps_lives_models_and_settings(tmp_path):
+    import updater
+    _old_copy(str(tmp_path))
+    release = _fake_release({"app/server.py": "new server", "engine/version.txt": "bbb 2026-11-01T00:00:00Z",
+                             "requirements.txt": "fastapi\n", "Open Clip Studio (Mac).command": "launcher",
+                             "projects/settings.json": "{}",            # must never overwrite the real one
+                             "engine/new_module.py": "new"})
+    pip_runs = []
+    out = updater.apply(str(tmp_path), download=lambda: release, pip=lambda: pip_runs.append(1))
+    read = lambda n: open(tmp_path / n).read()
+    assert read("app/server.py") == "new server" and read("engine/new_module.py") == "new"
+    assert not (tmp_path / "engine/old_module.py").exists()               # deleted upstream, deleted here
+    assert read("projects/oct1/project.json") == "my live"
+    assert "kept" in read("projects/settings.json")
+    assert read("models/m.onnx") == "model" and read(".venv/bin/python") == "python"
+    assert read("install-log.txt") == "log" and read("assets/fonts/Downloaded.ttf") == "font"
+    assert "Open Clip Studio (Mac).command" not in out["changed"]          # identical launcher left alone
+    assert pip_runs == []                                                  # same requirements: no reinstall
+    assert out["from"]["sha"] == "aaa" and out["to"]["sha"] == "bbb"
+
+
+def test_update_reinstalls_when_requirements_change(tmp_path):
+    import updater
+    _old_copy(str(tmp_path))
+    release = _fake_release({"app/server.py": "new", "requirements.txt": "fastapi\nnewthing\n"})
+    pip_runs = []
+    updater.apply(str(tmp_path), download=lambda: release, pip=lambda: pip_runs.append(1))
+    assert pip_runs == [1]
+
+
+def test_update_refuses_a_bad_download(tmp_path):
+    import io
+    import zipfile
+    import updater
+    _old_copy(str(tmp_path))
+    with pytest.raises(updater.UpdateError):                               # not a Clip Studio folder
+        updater.apply(str(tmp_path), download=lambda: _fake_release({"README.md": "x"}))
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("../escape.py", "x")
+        z.writestr("app/server.py", "x")
+    with pytest.raises(updater.UpdateError):                               # path outside the folder
+        updater.apply(str(tmp_path), download=lambda: buf.getvalue())
+    assert open(tmp_path / "app/server.py").read() == "old server"         # nothing changed either time
+    assert not (tmp_path.parent / "escape.py").exists()
+
+
+def test_version_comes_from_the_download_stamp(tmp_path):
+    import updater
+    os.makedirs(tmp_path / "engine")
+    (tmp_path / "engine/version.txt").write_text("$Format:%H %cI$\n")      # unstamped: unknown, so offer update
+    assert updater.local_version(str(tmp_path))["sha"] is None
+    (tmp_path / "engine/version.txt").write_text("abc123 2026-11-01T10:00:00Z\n")
+    assert updater.local_version(str(tmp_path)) == {"sha": "abc123", "date": "2026-11-01T10:00:00Z", "git": False}
+
+
+def test_update_waits_for_running_jobs(app_client, tmp_path, monkeypatch):
+    server, client = app_client
+    import updater
+    pid, _ = _project_with_plan(server, tmp_path)
+    server.queue.add(pid, "analyze")
+    monkeypatch.setattr(updater, "apply", lambda *a, **k: pytest.fail("must not update mid-job"))
+    r = client.post("/api/update")
+    assert r.status_code == 409 and "finished" in r.json()["detail"]
+
+
+def test_update_check_without_internet_says_so(app_client, monkeypatch):
+    server, client = app_client
+    import updater
+
+    def offline(url):
+        raise updater.UpdateError("Couldn't reach GitHub to check for updates (offline).")
+    monkeypatch.setattr(updater, "_get", offline)
+    r = client.get("/api/update")
+    assert r.status_code == 503 and "Couldn't reach GitHub" in r.json()["detail"]

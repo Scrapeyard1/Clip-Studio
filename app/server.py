@@ -761,6 +761,44 @@ def media_file(pid: str, path: str):
     return FileResponse(f, filename=name if name.endswith((".xml", ".srt")) else None)
 
 
+# ---------------- refresh & update ----------------
+UPDATE_EXIT = 3          # the Open launchers start Clip Studio again when it exits with this code
+
+
+@app.get("/api/update")
+def update_check():
+    import updater
+    try:
+        return updater.check()
+    except updater.UpdateError as e:
+        raise HTTPException(503, str(e))
+
+
+def restart():
+    """Start again on the new code. The launchers loop on UPDATE_EXIT; started by hand, replace this process."""
+    if os.environ.get("CLIPSTUDIO_LAUNCHER"):
+        os._exit(UPDATE_EXIT)
+    os.environ.pop("CLIPSTUDIO_OPEN_BROWSER", None)       # the open page reloads itself
+    os.environ["NO_BROWSER"] = "1"
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
+@app.post("/api/update")
+def update_apply():
+    import updater
+    with queue.cv:
+        busy = queue.current is not None or len(queue.q) > 0
+    if busy:
+        raise HTTPException(409, "Something is analyzing or rendering. Update when it's finished (or stop it first), "
+                                 "so nothing is cut off halfway.")
+    try:
+        result = updater.apply()
+    except updater.UpdateError as e:
+        raise HTTPException(500, str(e))
+    threading.Timer(1.0, restart).start()                 # after this answer reaches the page
+    return {"ok": True, "changed": len(result["changed"]), "to": result["to"]}
+
+
 app.mount("/fonts", StaticFiles(directory=paths.FONTS), name="fonts")
 app.mount("/", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static"), html=True), name="ui")
 

@@ -29,7 +29,7 @@ python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 python scripts/get_models.py        # ~1.2 GB into ./models (gitignored)
 python app/server.py                # http://localhost:8765
-python -m pytest -q tests           # 36 tests, ~1 min
+python -m pytest -q tests           # 49 tests, ~1 min
 ```
 The Claude API key goes in the app's Settings (stored in projects/settings.json, gitignored).
 Never commit it, print it, or paste it into files. Elijah has a working key with credit.
@@ -59,6 +59,12 @@ Done and tested on Linux (not yet on a Mac or Windows; first Mac run is the next
   cuts to word edges, stretches clips to a nearby quote; structure_notes() names missing beats live.
   Beat labels are editable (beats / cold_open_beats) and never stale a render. On Oct 1 it found the
   "two gods" vs "only one God" contradiction that the old one-pass planner missed.
+- Refresh & update (Nov 1): engine/updater.py + GET/POST /api/update + rail button. Version comes from
+  engine/version.txt, stamped with the commit by GitHub's ZIP (export-subst in .gitattributes); git
+  copies use git. Update swaps files in place, keeping projects/ models/ .venv/ fonts; restart is exit
+  code 3, which both Open launchers loop on (the Windows loop is one block so the .bat can be replaced
+  while running); started by hand it re-execs. CLIPSTUDIO_UPDATE_BRANCH tests an update from a branch.
+  Tested end to end on Linux through the Mac launcher + a browser.
 - First real run on the Oct 1 live ("What is ILLOGICAL about the Trinity?", 2:41:51) found 11
   conversations and 8 shorts; titles/description/chapters generated for "Black on YT".
 

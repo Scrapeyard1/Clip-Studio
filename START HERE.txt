@@ -57,6 +57,14 @@ USING IT
   File > Import > Timeline, and point it to the original recording when it asks.
 
 
+GETTING THE NEWEST VERSION
+--------------------------
+Press "Refresh & update" at the bottom left of the app. If there's a newer version, it shows what
+changed and "Update now" downloads it, restarts Clip Studio and reloads the page by itself (about a
+minute). Your lives, edits, renders, settings and the downloaded models are kept. If you already have
+the newest version, the button just refreshes the page. It waits if something is rendering.
+
+
 IF SOMETHING GOES WRONG
 -----------------------
 The installer saves everything it did in "install-log.txt" in this folder. Send that file, or a
