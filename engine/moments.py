@@ -1,67 +1,237 @@
-"""The 'brain': read a live's transcript and plan every output.
+"""The 'brain': read a live's transcript and plan every output, in two passes.
 
-Sends the timestamped transcript to Claude with the channel's editing recipe and
-gets back a JSON plan: the guest conversations, a cold open for each, safe-cut
-protections, stream housekeeping to flag, and ranked short candidates.
+Pass 1 (the whole live): map the guest conversations: who, where each starts and ends, the topic,
+how strong it is, titles, silences to protect, stream housekeeping.
 
-Needs ANTHROPIC_API_KEY. A 2h40m live is ~50k input tokens: about $0.20-0.50 on Sonnet 5.5.
+Pass 2 (each conversation on its own, in parallel): find where the caller's argument defeats itself
+(quoted word for word, with times), then build the cold open and the shorts in three beats:
+  SETUP  the line that tells a stranger what's being debated
+  CLASH  both sides in their own voices
+  TURN   the caller's argument undercutting itself and Elijah catching it (or the decisive answer)
+Each clip is labelled with its beat and who's speaking. plan_check then verifies the quotes against
+the transcript and flags any short that's missing a beat.
+
+Needs ANTHROPIC_API_KEY. A 2h40m live is ~60k input tokens in total: about $0.30-0.60 on Sonnet 5.5.
 """
-import argparse, json, os
+import argparse
+import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
-RECIPE = """You plan edits for the YouTube channel "Elijah Johnson Apologetics" (Christian apologetics
-lives: callers come up one at a time to challenge or ask Elijah about the faith).
+CHANNEL = """You plan edits for the YouTube channel "Elijah Johnson Apologetics": Christian apologetics
+lives where callers come up one at a time to challenge or question Elijah about the faith. The
+transcript has no speaker labels: work out who is talking from what is said (Elijah is the host who
+answers, reads Scripture and asks the follow-up questions; the caller raises the objection)."""
 
-From the timestamped transcript, return ONLY a JSON object with these keys:
+MAP_RECIPE = CHANNEL + """
+
+From the timestamped transcript of the whole live, return ONLY a JSON object with these keys:
 
 "conversations": one per guest, in order. Each:
   "guest": how Elijah addresses them (e.g. "Black on YT"), "start", "end" (seconds; start at the first
   hello to the guest, end after Elijah's reaction once they leave, before the next guest is called),
-  "topic", "rank": "STRONG" | "MEDIUM" | "WEAK", "summary" (2 sentences),
-  "cold_open": 2-4 [start, end] clips from LATER in the conversation, total 20-30 s: the guest's core
-     claim first, then the most heated or funniest exchange. Each clip starts and ends on a sentence
-     boundary. Never give away a twist the title teases.
+  "topic": the question being debated, as one plain sentence,
+  "kind": "debate" (the caller argues against Elijah's position) | "question" (a sincere question) |
+     "friendly" (chat, thanks, shout-outs),
+  "rank": "STRONG" | "MEDIUM" | "WEAK", "summary" (2 sentences),
   "titles": 3 options in the channel's style: who the guest is + the conflict + one or two CAPITALIZED
      words (e.g. "Jehovah's Witness Runs A NEW ARGUMENT", "PLEASE Do Not Be Like This Brother HERE").
+     Never say a caller admitted, conceded or was destroyed unless his own words in the call show it.
   "protect": [start, end] ranges whose silence must not be cut (a stunned pause after a hard question).
 "housekeeping": [{"start","end","what"}] stream business inside conversations to flag for removal:
   raid setup, mod instructions, super chat / donation reading, tech trouble.
-"shorts": up to 8, best first. Each: "category": Roast | Argument Win | Explainer | Testimony | Pastoral,
-  "pieces": 1-3 [start, end] ranges played in order (30-90 s total), "hook": <= 8 words shown on screen,
-  "why": one line. RULE for Roast: the guest's actual claim must play before Elijah's response.
 
 Use only times that appear in the transcript. Seconds as numbers."""
 
+CLIP_RECIPE = CHANNEL + """
 
-def system_prompt():
-    """The recipe plus every editing rule Elijah has taught the chat editor."""
+You get the transcript of ONE conversation. Return ONLY a JSON object with "self_defeats",
+"cold_open" and "shorts".
+
+THE STRUCTURE. Every short and every cold open is built in three beats, played in this order:
+  1. SETUP: the line that tells a stranger what is being debated, usually the caller's question or
+     claim, or Elijah's question that frames it ("Do you believe the Son is God?"). 2-10 s. Without it
+     nobody knows what the fight is about. It may come from earlier in the call than the rest.
+  2. CLASH: both sides in their own voices: the caller's position, then Elijah's challenge, or the
+     back-and-forth. Never only one person talking.
+  3. TURN: the moment the caller's argument undercuts itself, then Elijah catching it. If there is no
+     self-defeat, the turn is the decisive answer or the payoff.
+For Explainer, Testimony and Pastoral shorts the clash may be skipped: setup = the question that
+prompted it, turn = the payoff.
+
+"self_defeats": every place where the CALLER's argument defeats itself:
+  - he contradicts something he said ("there is only one God" ... "there's two gods"),
+  - he admits the point he is arguing against,
+  - he relies on a source or standard he rejects, or holds Elijah to a standard he won't meet himself,
+  - his objection, if true, would undercut his own position.
+  Each: {"claim": his exact words, "claim_at": seconds, "against": his exact words that undercut it,
+  "against_at": seconds, "kind": "contradiction" | "admission" | "double standard" | "undercuts itself",
+  "caught_at": seconds where Elijah points it out (or null), "explain": one plain sentence}.
+  Copy the words exactly as they appear in the transcript. Being confused, silent, rude or losing is NOT
+  a self-defeat. Return [] if there is none; never invent one.
+
+"cold_open": 2-4 clips, 20-30 s in total (never more than 30), from LATER in the conversation, in setup -> clash -> turn
+  order: the caller's core claim, the most heated exchange, then the turn (if there is a self-defeat,
+  his own contradicting words or Elijah's catch, stopping before Elijah's full explanation).
+  Each clip: {"start", "end", "beat": "setup"|"clash"|"turn", "speaker": "caller"|"elijah"|"both"}.
+
+"shorts": 0-3 of the best moments (only real ones; quality over count), each 20-90 s:
+  {"category": "Self-Defeat" | "Roast" | "Argument Win" | "Explainer" | "Testimony" | "Pastoral",
+   "hook": on-screen text, at most 8 words, that states the debate without lying about it,
+   "topic": the question being debated, one plain sentence,
+   "why": one line on why it works,
+   "strength": 1-5,
+   "pieces": 1-5 clips played in order, each {"start", "end", "beat", "speaker"} as above,
+   "self_defeat": the index in self_defeats this short shows, or null}.
+  A Self-Defeat short must play BOTH the claim and the words that undercut it.
+
+Rules for every clip: start at the beginning of a sentence and end at the end of one; use only times
+that appear in the transcript; seconds as numbers."""
+
+
+def map_prompt():
     import editor_rules
-    return RECIPE + editor_rules.prompt_block("planning")
+    return MAP_RECIPE + editor_rules.prompt_block("titles")
 
 
-def condensed(transcript):
+def clip_prompt():
+    """The structure plus every editing rule Elijah has taught the chat editor."""
+    import editor_rules
+    return CLIP_RECIPE + editor_rules.prompt_block("planning")
+
+
+def system_prompt():                      # kept for anything that shows "what Claude is told"
+    return clip_prompt()
+
+
+def condensed(transcript, start=None, end=None):
     """One line per transcript segment, stamped with its start (each line ends where the next begins)."""
-    out = [f"[{s['start']:.1f}] {s['text']}" for s in transcript["segments"]]
-    out.append(f"[{transcript['duration']:.1f}] (end of recording)")
+    segs = [s for s in transcript["segments"]
+            if (start is None or s["end"] > start) and (end is None or s["start"] < end)]
+    out = [f"[{s['start']:.1f}] {s['text']}" for s in segs]
+    last = end if end is not None else transcript["duration"]
+    out.append(f"[{last:.1f}] (end)")
     return "\n".join(out)
 
 
-def plan(transcript, model=None, on_chars=None):
-    """Ask Claude for a plan, check it, and ask once more with the problems if it can't be used."""
+def _ask_json(system, user, model, on_chars=None, check=None):
+    """Ask, parse the JSON, and ask once more with the problem if it can't be used."""
     from claude_api import ask, extract_json
-    from plan_check import PlanError, validate
-    messages = [{"role": "user", "content": condensed(transcript)}]
-    text, _ = ask(system_prompt(), messages, model=model, on_chars=on_chars)
+    messages = [{"role": "user", "content": user}]
+    text, _ = ask(system, messages, model=model, on_chars=on_chars)
     for attempt in (1, 2):
         try:
-            raw = extract_json(text)
-            clean, problems = validate(raw, transcript["duration"])
-            return clean, problems
-        except (ValueError, PlanError) as e:
+            data = extract_json(text)
+            if check:
+                check(data)
+            return data
+        except ValueError as e:
             if attempt == 2:
-                raise PlanError(f"Claude's plan couldn't be used twice in a row ({e}). Press Retry to ask again.")
+                raise
             messages += [{"role": "assistant", "content": text},
-                         {"role": "user", "content": f"That plan can't be used: {e} Return the corrected JSON only."}]
-            text, _ = ask(system_prompt(), messages, model=model)
+                         {"role": "user", "content": f"That can't be used: {e} Return the corrected JSON only."}]
+            text, _ = ask(system, messages, model=model)
+
+
+def _clips_for(transcript, conv, model, on_chars=None):
+    lead = 20                                                  # a little context before the hello
+    user = (f"Caller: {conv.get('guest')}\nTopic: {conv.get('topic')}\n"
+            f"Conversation runs {conv['start']:.1f} to {conv['end']:.1f} s.\n\n"
+            + condensed(transcript, max(0, conv["start"] - lead), conv["end"]))
+
+    def check(d):
+        if not isinstance(d, dict):
+            raise ValueError("expected a JSON object with self_defeats, cold_open and shorts")
+        cold = [x for x in (d.get("cold_open") or []) if isinstance(x, dict)]
+        try:
+            spans = [(float(x["start"]), float(x["end"])) for x in cold]
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("every cold_open clip needs a numeric start and end")
+        total = sum(b - a for a, b in spans)
+        if total > 40:
+            raise ValueError(f"the cold open is {total:.0f} s; keep it to 20-30 s in total")
+        outside = [a for a, b in spans if a < conv["start"] or b > conv["end"] + 1]
+        if outside:
+            raise ValueError(f"cold_open clips must come from inside this conversation "
+                             f"({conv['start']:.1f}-{conv['end']:.1f} s)")
+    return _ask_json(clip_prompt(), user, model, on_chars, check)
+
+
+def plan(transcript, model=None, on_chars=None, workers=4):
+    """Pass 1 maps the conversations; pass 2 builds each one's self-defeats, cold open and shorts.
+    Returns (clean plan, problems) after plan_check has verified everything against the transcript."""
+    from plan_check import PlanError, validate
+    progress = {"map": 0, "clips": {}}
+    lock = threading.Lock()
+
+    def report():
+        if on_chars:
+            on_chars(progress["map"] + sum(progress["clips"].values()))
+
+    def map_chars(n):
+        progress["map"] = n
+        report()
+
+    def check_map(d):
+        if not isinstance(d, dict) or not isinstance(d.get("conversations"), list) or not d["conversations"]:
+            raise ValueError("expected a JSON object with a non-empty conversations list")
+    try:
+        mapped = _ask_json(map_prompt(), condensed(transcript), model, map_chars, check_map)
+    except ValueError as e:
+        raise PlanError(f"Claude's map of the live couldn't be used ({e}). Press Retry to ask again.")
+
+    usable = []
+    for c in mapped["conversations"]:
+        try:
+            c["start"], c["end"] = float(c["start"]), float(c["end"])
+            if c["end"] - c["start"] >= 60:
+                usable.append(c)
+        except (KeyError, TypeError, ValueError):
+            continue
+
+    def one(i_c):
+        i, c = i_c
+
+        def chars(n):
+            with lock:
+                progress["clips"][i] = n
+            report()
+        try:
+            return i, _clips_for(transcript, c, model, chars), None
+        except Exception as e:                       # one bad conversation never sinks the whole plan
+            return i, None, str(e)
+
+    failures = []
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        for i, data, err in pool.map(one, list(enumerate(usable))):
+            c = usable[i]
+            if err or not data:
+                failures.append(f"{c.get('guest', 'A conversation')}: couldn't build its clips ({err}). "
+                                "Pick the cold open by hand or press Retry.")
+                c["cold_open"], c["self_defeats"], c["shorts"] = [], [], []
+                continue
+            c["cold_open"] = data.get("cold_open") or []
+            c["self_defeats"] = data.get("self_defeats") or []
+            c["shorts"] = []
+            for s in data.get("shorts") or []:
+                if isinstance(s, dict):
+                    s["_defeats"] = c["self_defeats"]        # plan_check resolves the one it shows
+                    c["shorts"].append(s)
+
+    rank_w = {"STRONG": 3, "MEDIUM": 2, "WEAK": 1}
+    shorts = []
+    for c in usable:
+        for s in c.pop("shorts", []):
+            try:
+                strength = float(s.get("strength") or 0)
+            except (TypeError, ValueError):
+                strength = 0
+            s["_order"] = -(strength + rank_w.get(c.get("rank"), 0) + (1.5 if s.get("self_defeat") is not None else 0))
+            shorts.append(s)
+    shorts.sort(key=lambda s: s["_order"])
+    raw = {"conversations": usable, "shorts": shorts[:12], "housekeeping": mapped.get("housekeeping") or []}
+    clean, problems = validate(raw, transcript["duration"], transcript)
+    return clean, failures + problems
 
 
 if __name__ == "__main__":

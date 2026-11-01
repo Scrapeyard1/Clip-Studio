@@ -68,6 +68,24 @@ with the exact fix.
    Exports: **Resolve / Premiere** (`.xml`; Resolve: File > Import > Timeline, Premiere: File > Import),
    the video, and `.srt` captions (CapCut: import the video, then the captions).
 
+## How clips are chosen: setup, clash, turn
+
+Claude plans in two passes. First it maps the live (every conversation, the caller, the topic, how
+strong it is). Then it reads each conversation on its own and:
+
+- finds every place the caller's argument **defeats itself** (he contradicts himself, admits the point,
+  leans on a source or standard he rejects), quoting both statements word for word with their times;
+- builds the cold open and the shorts in three beats: **Setup** (the question or claim that tells a
+  stranger what's being debated), **Clash** (both sides in their own voices), **Turn** (his argument
+  undercutting itself and Elijah catching it, or the decisive answer).
+
+Before you see anything, the app checks every quoted self-defeat against the words actually said near
+that time (correcting the time if it's slightly off) and drops any it can't find, so nothing is
+claimed without evidence. Cuts that land inside a word move to its edge, and a quote just outside a
+clip pulls the clip edge out to it. In review each clip shows its beat and who's speaking, a red box
+shows any self-defeat with both quotes ("Hear it" on each), and a note names any missing beat
+("No setup: viewers won't know what's being debated"). The chat editor can fix those for you.
+
 ## The chat editor
 
 "Ask the editor" (left rail) or "Tell the editor" on any clip opens a chat. Say what to change in your

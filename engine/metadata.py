@@ -17,6 +17,9 @@ What has worked on this channel (titles):
   "He Questioned Jesus' Resurrection"
   Formula: who the guest is + the conflict + one or two CAPITALIZED words. 40-65 characters.
   Curiosity without lying: never claim a conversion, concession or "destroyed" that didn't happen.
+  Never write that a caller "admitted", "conceded" or "agreed" unless his own words in the video say
+  so. A self-defeat (he contradicts himself) can be named plainly: "He Said ONE God, Then TWO".
+  The pinned comment must not put words in the caller's mouth either.
 
 What has worked (thumbnail text): COOKED, EXPOSED, EYES OPENED, THIS WAS BAD, PROVE YOUR CLAIM,
   HUMBLED, IS TRINITY LOGICAL?, I'M SO CONFUSED, WAS JESUS CREATED. 1-3 words, never repeats the title.

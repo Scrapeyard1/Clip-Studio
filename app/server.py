@@ -40,8 +40,8 @@ SETTINGS = os.path.join(PROJECTS, "settings.json")
 SETTING_KEYS = {"anthropic_api_key", "sting", "outro", "host_photos", "recordings_folder", "guest_audio_track"}
 EDITABLE = {
     "long": {"guest", "topic", "start", "end", "cold_open", "protect", "selected",
-             "titles", "chosen_title", "description", "chosen_thumbnail", "approved"},
-    "short": {"hook", "category", "pieces", "framing", "protect", "selected", "approved", "guest"},
+             "titles", "chosen_title", "description", "chosen_thumbnail", "approved", "cold_open_beats"},
+    "short": {"hook", "category", "pieces", "framing", "protect", "selected", "approved", "guest", "beats"},
 }
 
 from contextlib import asynccontextmanager
@@ -157,6 +157,8 @@ def view(pid):
         v = {**it, "selected": mine.get("selected", it["kind"] == "long" and it.get("rank") != "WEAK"),
              "approved": mine.get("approved", False), "render": state,
              "problems": pipeline.render_problems(it)}
+        import plan_check
+        v["structure"] = plan_check.structure_notes(v)
         rel = lambda f: os.path.relpath(f, d).replace("\\", "/")
         if os.path.exists(outs["video"]):
             v["files"] = {k: rel(f) for k, f in outs.items() if os.path.exists(f)}
@@ -457,6 +459,15 @@ def apply_edit(pid, iid, changes):
             if not isinstance(spans, list) or any(not (isinstance(s, list) and len(s) == 2 and 0 <= s[0] < s[1] <= dur + 1)
                                                   for s in spans):
                 raise HTTPException(400, "Each clip needs a start before its end, inside the recording.")
+    for k, field in (("beats", "pieces"), ("cold_open_beats", "cold_open")):
+        if k in changes:
+            import plan_check
+            labels, spans = changes[k], changes.get(field, item.get(field) or [])
+            if not isinstance(labels, list) or len(labels) != len(spans) or any(
+                    not isinstance(b, dict) or b.get("beat") not in plan_check.BEATS
+                    or b.get("speaker", "unsure") not in plan_check.SPEAKERS for b in labels):
+                raise HTTPException(400, "Give one label per clip: beat setup/clash/turn/payoff and speaker "
+                                         "caller/elijah/both/unsure.")
     if "framing" in changes:
         import render_short
         if changes["framing"] not in render_short.FRAMINGS:

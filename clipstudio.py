@@ -33,6 +33,10 @@ import paths  # noqa: E402
 
 LONG_EDIT_KEYS = ("guest", "topic", "start", "end", "cold_open", "protect")
 SHORT_EDIT_KEYS = ("hook", "category", "pieces", "framing", "protect", "guest")
+# beat labels (setup / clash / turn) can be corrected too; they don't change the video, so they're kept
+# out of render_inputs and never make a render stale
+LONG_LABEL_KEYS = ("cold_open_beats",)
+SHORT_LABEL_KEYS = ("beats",)
 
 
 class Reporter:
@@ -146,9 +150,11 @@ def effective_items(d):
     e = edits(d)["items"]
     convs, shorts = [], []
     for c in plan.get("conversations", []):
-        convs.append({**c, **{k: v for k, v in e.get(c["id"], {}).items() if k in LONG_EDIT_KEYS}, "kind": "long"})
+        convs.append({**c, **{k: v for k, v in e.get(c["id"], {}).items() if k in LONG_EDIT_KEYS + LONG_LABEL_KEYS},
+                      "kind": "long"})
     for s in plan.get("shorts", []):
-        shorts.append({**s, **{k: v for k, v in e.get(s["id"], {}).items() if k in SHORT_EDIT_KEYS}, "kind": "short"})
+        shorts.append({**s, **{k: v for k, v in e.get(s["id"], {}).items() if k in SHORT_EDIT_KEYS + SHORT_LABEL_KEYS},
+                       "kind": "short"})
     return convs, shorts
 
 

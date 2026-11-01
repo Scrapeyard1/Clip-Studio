@@ -53,6 +53,12 @@ Done and tested on Linux (not yet on a Mac or Windows; first Mac run is the next
   on upload; greyed "Upcoming" previews for unrendered items.
 - Full preview before rendering: clipstudio.cut_plan (same timeline code as the renderers) +
   /cutclip joins nearby parts at 360p; the UI player plays parts back to back. "Hear it" is exact.
+- Debate structure (Elijah's spec, Oct 31): two-pass planner in engine/moments.py (map the live, then
+  each conversation in parallel) -> self_defeats with verbatim quotes, cold opens and shorts labelled
+  setup/clash/turn + speaker. plan_check verifies quotes against transcript words (find_quote), snaps
+  cuts to word edges, stretches clips to a nearby quote; structure_notes() names missing beats live.
+  Beat labels are editable (beats / cold_open_beats) and never stale a render. On Oct 1 it found the
+  "two gods" vs "only one God" contradiction that the old one-pass planner missed.
 - First real run on the Oct 1 live ("What is ILLOGICAL about the Trinity?", 2:41:51) found 11
   conversations and 8 shorts; titles/description/chapters generated for "Black on YT".
 
@@ -77,7 +83,7 @@ pipeline" is already done (it was written against old commit 4eee7f8). Known iss
 request embeds every word timing (~330k tokens for one live; text-only is ~31k).
 
 Agreed plan, phased (work on a branch, show Elijah before merging):
-1. Editorial brain: rewrite engine/moments.py around CLAUDE_MASTER_PROMPT.md (map the live, then
+1. (Mostly done: see Status) Editorial brain: rewrite engine/moments.py around CLAUDE_MASTER_PROMPT.md (map the live, then
    candidates, then score), chunked text with segment IDs; fold the kit's semantic checks into
    plan_check.py (snap cuts that split a word to word edges instead of rejecting); show scores,
    reasons and rejected moments in the review UI; add the "no claimed admissions" rule to titles.

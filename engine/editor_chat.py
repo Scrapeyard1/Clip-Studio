@@ -28,6 +28,11 @@ How to work:
 - Conversations have "start", "end" and "cold_open" (list of [start, end] clips from later in the call,
   about 30 s total). Shorts have "pieces" (list of [start, end] played in order) and "hook" (on-screen
   text, at most 8 words), "framing" (auto, host, full, split, guest).
+- Shorts and cold opens follow three beats in order: SETUP (the question or claim that tells a
+  stranger what's being debated), CLASH (both sides in their own voices), TURN (the caller's argument
+  undercutting itself and Elijah catching it, or the decisive answer). "missing" lists beats an item
+  lacks; when he asks you to fix the structure, read the transcript and add or move clips to fill them.
+- A self-defeat is only claimed when the caller's own words show it; never invent one.
 - Change only what he asked about, with update_item. If it returns an error, explain it simply.
 - When he gives a reason that would apply to future clips ("because the guest's question is the hook",
   "I never want the like-the-live ask in a short"), also call remember_rule with a short, general rule:
@@ -46,7 +51,9 @@ TOOLS = [
     {"name": "search_transcript", "description": "Find lines containing some words (case-insensitive). Up to 15 matches.",
      "input_schema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}},
     {"name": "update_item", "description": "Change a conversation or short. Allowed keys: conversations: start, end, "
-     "cold_open, guest, topic, protect. Shorts: pieces, hook, framing, category, guest. Times in source seconds.",
+     "cold_open, cold_open_beats, guest, topic, protect. Shorts: pieces, beats, hook, framing, category, guest. "
+     "Times in source seconds. beats / cold_open_beats: one {beat: setup|clash|turn|payoff, speaker: "
+     "caller|elijah|both|unsure} per clip, in the same order; send them whenever you add, remove or reorder clips.",
      "input_schema": {"type": "object", "properties": {"id": {"type": "string"}, "changes": {"type": "object"}},
                       "required": ["id", "changes"]}},
     {"name": "remember_rule", "description": "Save a general editing rule for all future lives.",
@@ -72,9 +79,12 @@ def summary(item):
     if item["kind"] == "long":
         return {"id": item["id"], "kind": "conversation", "guest": item.get("guest"), "topic": item.get("topic"),
                 "start": item["start"], "end": item["end"], "cold_open": item.get("cold_open", []),
-                "render": item.get("render")}
-    return {"id": item["id"], "kind": "short", "hook": item.get("hook"), "pieces": item.get("pieces", []),
-            "framing": item.get("framing"), "category": item.get("category"), "render": item.get("render")}
+                "cold_open_beats": item.get("cold_open_beats"), "self_defeats": item.get("self_defeats") or [],
+                "missing": item.get("structure") or [], "render": item.get("render")}
+    return {"id": item["id"], "kind": "short", "hook": item.get("hook"), "topic": item.get("topic"),
+            "pieces": item.get("pieces", []), "beats": item.get("beats"), "self_defeat": item.get("self_defeat"),
+            "framing": item.get("framing"), "category": item.get("category"),
+            "missing": item.get("structure") or [], "render": item.get("render")}
 
 
 def history(d):

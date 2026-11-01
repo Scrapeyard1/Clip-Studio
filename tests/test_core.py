@@ -553,3 +553,149 @@ def test_preview_clip_is_the_length_it_says(app_client, tmp_path):
     assert abs(media.probe(f2)["duration"] - 3.8) < 0.15                        # exactly the clip, no padding
     for bad in ("20-10", "10-14,12-16", "0-300", "x-y"):
         assert client.get(f"/api/projects/{pid}/cutclip", params={"p": bad}).status_code == 400
+
+
+# ---------- debate structure: setup -> clash -> turn, verified self-defeats ----------
+def _talk(lines):
+    """A transcript from [(start, "words ...")], one word every 0.4 s."""
+    segs = []
+    for start, text in lines:
+        ws = [{"w": w, "s": round(start + k * 0.4, 2), "e": round(start + k * 0.4 + 0.3, 2)} for k, w in enumerate(text.split())]
+        segs.append({"start": start, "end": ws[-1]["e"], "text": text, "words": ws})
+    return {"duration": 600, "segments": segs}
+
+
+TALK = _talk([(100, "Do you believe the Son is God"), (104, "Yes I believe that there's two gods"),
+              (110, "Do you believe the scriptures say there's only one God"),
+              (116, "Correct there is only one God but there's two"),
+              (122, "You just said only one God and two gods"), (130, "Well it's hard to explain")])
+
+
+def test_cuts_never_split_words():
+    from plan_check import validate
+    clean, _ = validate({"shorts": [{"hook": "h", "pieces": [[104.5, 106.5]]}]}, 600, TALK)
+    a, b = clean["shorts"][0]["pieces"][0]
+    assert a == 104.4 and b == 106.7          # 104.5 was inside "I"; 106.5 inside "gods"
+
+
+def test_self_defeats_need_the_callers_real_words():
+    from plan_check import validate
+    defeats = [{"claim": "there is only one God", "claim_at": 119, "against": "but there's two", "against_at": 118,
+                "kind": "contradiction", "caught_at": 122, "explain": "One God and two gods."},
+               {"claim": "Jesus is a prophet only", "claim_at": 125, "against": "he is not God", "against_at": 126}]
+    plan = {"conversations": [{"guest": "Black on YT", "start": 90, "end": 200, "cold_open": [[104, 107]],
+                               "self_defeats": defeats}],
+            "shorts": [{"hook": "One God, then TWO", "category": "Self-Defeat", "self_defeat": 0, "_defeats": defeats,
+                        "pieces": [{"start": 110, "end": 125, "beat": "setup", "speaker": "elijah"}]},
+                       {"hook": "Made up", "category": "Self-Defeat", "self_defeat": 1, "_defeats": defeats,
+                        "pieces": [[100, 120]]}]}
+    clean, problems = validate(plan, 600, TALK)
+    conv = clean["conversations"][0]
+    assert [d["claim"] for d in conv["self_defeats"]] == ["there is only one God"]       # the invented one is gone
+    assert abs(conv["self_defeats"][0]["claim_at"] - 116.4) < 0.01                      # time corrected to where "there" is said
+    assert any("couldn't be found" in p for p in problems)
+    real, fake = clean["shorts"]
+    assert real["category"] == "Self-Defeat" and real["self_defeat"]["against"] == "but there's two"
+    assert fake["category"] == "Argument Win" and fake["self_defeat"] is None            # never labelled without proof
+
+
+def test_missing_beats_are_named():
+    from plan_check import structure_notes
+    sd = {"claim": "there is only one God", "claim_at": 117.2, "against": "but there's two", "against_at": 119.6}
+    lonely = {"kind": "short", "category": "Roast", "pieces": [[104, 108]], "beats": [{"beat": "clash", "speaker": "caller"}]}
+    notes = structure_notes(lonely)
+    assert any(n.startswith("No setup") for n in notes) and any("Only the caller speaks" in n for n in notes)
+    assert any(n.startswith("No turn") for n in notes)
+    whole = {"kind": "short", "category": "Self-Defeat", "self_defeat": sd, "pieces": [[110, 113], [116, 121], [122, 125]],
+             "beats": [{"beat": "setup", "speaker": "elijah"}, {"beat": "clash", "speaker": "caller"},
+                       {"beat": "turn", "speaker": "elijah"}]}
+    assert structure_notes(whole) == []
+    cut_short = dict(whole, pieces=[[110, 113], [116, 118], [122, 125]])
+    assert any("isn't fully in the clip" in n for n in structure_notes(cut_short))
+    cold = {"kind": "long", "cold_open": [[122, 125], [104, 107]], "self_defeats": [sd],
+            "cold_open_beats": [{"beat": "clash", "speaker": "both"}, {"beat": "clash", "speaker": "caller"}]}
+    assert len(structure_notes(cold)) == 2                     # no setup first, and the contradiction isn't teased
+    assert structure_notes({"kind": "short", "category": "Roast", "pieces": [[1, 2]]}) == []   # old plans: no labels, no nagging
+
+
+def test_two_pass_planner_builds_the_structure(monkeypatch):
+    import claude_api
+    import moments
+    calls = []
+
+    def fake_ask(system, messages, **kw):
+        calls.append(system)
+        if system.startswith(moments.CHANNEL) and "of the whole live" in system:
+            return json.dumps({"conversations": [
+                {"guest": "Black on YT", "start": 95, "end": 200, "topic": "Is the Trinity two gods?", "kind": "debate",
+                 "rank": "STRONG", "titles": ["He Said ONE God, Then TWO"]},
+                {"guest": "Broken", "start": 300, "end": 420, "rank": "WEAK"}], "housekeeping": []}), {}
+        if "Caller: Broken" in messages[0]["content"]:
+            raise claude_api.ClaudeError("overloaded")
+        return json.dumps({
+            "self_defeats": [{"claim": "there is only one God", "claim_at": 117, "against": "but there's two",
+                              "against_at": 119, "kind": "contradiction", "caught_at": 122, "explain": "x"}],
+            "cold_open": [{"start": 104, "end": 107, "beat": "setup", "speaker": "caller"},
+                          {"start": 116, "end": 121, "beat": "turn", "speaker": "caller"}],
+            "shorts": [{"category": "Argument Win", "hook": "Two gods?", "strength": 3, "self_defeat": None,
+                        "pieces": [{"start": 100, "end": 108, "beat": "setup", "speaker": "both"}]},
+                       {"category": "Self-Defeat", "hook": "One God, then TWO", "strength": 3, "self_defeat": 0,
+                        "topic": "Is the Trinity two gods?",
+                        "pieces": [{"start": 110, "end": 113, "beat": "setup", "speaker": "elijah"},
+                                   {"start": 116, "end": 121, "beat": "clash", "speaker": "caller"},
+                                   {"start": 122, "end": 125, "beat": "turn", "speaker": "elijah"}]}]}), {}
+    monkeypatch.setattr(claude_api, "ask", fake_ask)
+    clean, problems = moments.plan(TALK, workers=2)
+    assert len(calls) == 3                                     # one map + one per conversation
+    assert "SETUP" in calls[1] and "self_defeats" in calls[1]
+    conv = next(c for c in clean["conversations"] if c["guest"] == "Black on YT")
+    assert [b["beat"] for b in conv["cold_open_beats"]] == ["setup", "turn"]
+    assert conv["self_defeats"][0]["against"] == "but there's two"
+    assert clean["shorts"][0]["category"] == "Self-Defeat"     # a proven self-defeat ranks first
+    assert clean["shorts"][0]["beats"][2] == {"beat": "turn", "speaker": "elijah"}
+    assert any("Broken" in p and "couldn't build its clips" in p for p in problems)   # one failure doesn't sink the rest
+
+
+def test_beat_labels_can_be_fixed_without_making_a_render_stale(app_client, tmp_path):
+    server, client = app_client
+    pid, d = _project_with_plan(server, tmp_path)
+    plan = media.load_json(os.path.join(d, "work", "plan.json"))
+    plan["shorts"] = [{"id": "s200", "hook": "h", "pieces": [[200, 210], [220, 230]], "framing": "auto",
+                       "category": "Roast", "beats": [{"beat": "clash", "speaker": "caller"}, {"beat": "turn", "speaker": "elijah"}]}]
+    media.write_json(os.path.join(d, "work", "plan.json"), plan)
+    item = next(i for i in client.get(f"/api/projects/{pid}").json()["items"] if i["id"] == "s200")
+    assert any(n.startswith("No setup") for n in item["structure"])
+    before = pipeline.render_inputs(d, next(i for i in pipeline.effective_items(d)[1] if i["id"] == "s200"), {})
+    fixed = [{"beat": "setup", "speaker": "caller"}, {"beat": "turn", "speaker": "elijah"}]
+    r = client.patch(f"/api/projects/{pid}/items/s200", json={"beats": fixed})
+    assert r.status_code == 200 and r.json()["beats"] == fixed
+    assert not any(n.startswith("No setup") for n in r.json()["structure"])
+    after = pipeline.render_inputs(d, next(i for i in pipeline.effective_items(d)[1] if i["id"] == "s200"), {})
+    assert before == after                                     # labels never force a re-render
+    assert client.patch(f"/api/projects/{pid}/items/s200", json={"beats": fixed[:1]}).status_code == 400
+
+
+def test_a_quote_just_outside_its_clip_is_pulled_in():
+    from plan_check import validate, structure_notes
+    defeats = [{"claim": "there is only one God", "claim_at": 117, "against": "but there's two", "against_at": 119}]
+    plan = {"shorts": [{"hook": "h", "category": "Self-Defeat", "self_defeat": 0, "_defeats": defeats,
+                        "pieces": [{"start": 118.0, "end": 121, "beat": "clash", "speaker": "caller"}]}]}
+    s = validate(plan, 600, TALK)[0]["shorts"][0]
+    assert s["pieces"][0][0] <= 116.4                         # stretched back to where "there is only one God" starts
+    assert not any("isn't fully in the clip" in n for n in structure_notes(dict(s, kind="short")))
+
+
+def test_long_cold_opens_are_sent_back(monkeypatch):
+    import claude_api
+    import moments
+    answers = [json.dumps({"self_defeats": [], "shorts": [],
+                           "cold_open": [{"start": 100, "end": 130}, {"start": 140, "end": 170}]}),
+               json.dumps({"self_defeats": [], "shorts": [], "cold_open": [{"start": 104, "end": 107, "beat": "setup"}]})]
+    asked = []
+
+    def fake_ask(system, messages, **kw):
+        asked.append(messages[-1]["content"])
+        return answers.pop(0), {}
+    monkeypatch.setattr(claude_api, "ask", fake_ask)
+    out = moments._clips_for(TALK, {"guest": "A", "start": 95, "end": 200}, None)
+    assert "60 s" in asked[1] and out["cold_open"][0]["start"] == 104

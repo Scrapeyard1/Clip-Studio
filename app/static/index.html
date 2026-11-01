@@ -136,6 +136,23 @@ h2 { font: 400 30px/1 "Anton", sans-serif; margin: 0 0 6px; letter-spacing: .3px
 .btn { background: var(--deck-2); border: 1px solid var(--rule); border-radius: var(--radius-s); padding: 7px 12px; cursor: pointer; text-decoration: none; font-weight: 600; font-size: 14px; display: inline-block; }
 .btn:hover { border-color: var(--mist); }
 .btn.small { padding: 4px 9px; font-size: 13px; }
+.beat { font: 400 11px/1 "Anton", sans-serif; letter-spacing: .6px; text-transform: uppercase; padding: 5px 6px 4px; border-radius: 4px; min-width: 74px; text-align: center; border: 1px solid var(--rule); color: var(--mist); white-space: nowrap; }
+.clip-row:has(.beat) { gap: 6px; }
+.clip-row:has(.beat) .tin { width: 92px; }
+.beat.setup { color: #8FB8FF; border-color: #35507A; }
+.beat.clash { color: var(--gold); border-color: #6B5419; }
+.beat.turn { color: #FF8A8F; border-color: #7A2E33; }
+.beat.payoff { color: var(--ok); border-color: #2C6B3B; }
+.topic-line { color: var(--paper); font-size: 14px; margin-top: 4px; }
+.topic-line b { color: var(--mist); font-weight: 600; }
+.defeat { border: 1px solid #7A2E33; background: rgba(240,68,75,.07); border-radius: var(--radius-m); padding: 12px 14px; margin-top: 14px; }
+.defeat .dh { font: 400 15px/1 "Anton", sans-serif; letter-spacing: .6px; color: #FF8A8F; text-transform: uppercase; margin-bottom: 8px; }
+.defeat .q { display: grid; grid-template-columns: 70px 1fr auto; gap: 8px; align-items: baseline; margin: 6px 0; }
+.defeat .q span { color: var(--mist); font-size: 13px; }
+.defeat .q q { font-style: italic; }
+.defeat .why { color: var(--mist); font-size: 13px; margin-top: 6px; }
+.struct { color: var(--gold); font-size: 14px; margin: 10px 0 0; padding-left: 18px; }
+.struct li::marker { content: "◇  "; }
 .caller { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; background: var(--deck-2); border: 1px solid var(--rule); border-radius: var(--radius-m); padding: 12px 14px; }
 .caller .ph { width: 76px; height: 76px; border-radius: 50%; border: 3px solid var(--gold); object-fit: cover; background: var(--night); display: grid; place-items: center; font: 28px Anton, sans-serif; color: var(--gold); flex: none; }
 .caller .who { display: grid; gap: 6px; flex: 1; min-width: 180px; }
@@ -538,6 +555,17 @@ function upcomingTile(t, a, b, label, caption) {
     <span class="play"><span>▶</span></span><span class="cap">${esc(caption)}</span></button>`;
 }
 
+function defeatBox(d, title) {
+  const kind = { contradiction: "He contradicts himself", admission: "He admits the point", "double standard": "Double standard", "undercuts itself": "His argument undercuts itself" }[d.kind] || "Self-defeat";
+  return `<div class="defeat"><div class="dh">${esc(title || kind)}</div>
+    <div class="q"><span>${fmt(d.claim_at)}</span><q>${esc(d.claim)}</q><button class="btn small" data-hear="${d.claim_at}|${d.claim_at + 6}">Hear it</button></div>
+    <div class="q"><span>${fmt(d.against_at)}</span><q>${esc(d.against)}</q><button class="btn small" data-hear="${d.against_at}|${d.against_at + 6}">Hear it</button></div>
+    ${d.explain ? `<div class="why">${esc(d.explain)}${d.caught_at != null ? ` You catch it at ${fmt(d.caught_at)}.` : ""}</div>` : ""}</div>`;
+}
+function structNotes(i) {
+  return (i.structure || []).length ? `<ul class="struct">${i.structure.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : "";
+}
+
 const RENDER_LABEL = { done: "Rendered", stale: "Changed since render", missing: "Not rendered" };
 function stateChip(i) {
   const running = P.status.state === "running" && P.status.job === "render" && (P.status.ids || []).includes(i.id);
@@ -547,8 +575,16 @@ function stateChip(i) {
   return `<span class="chip state ${i.render}">${RENDER_LABEL[i.render]}</span>`;
 }
 
-function clipRows(spans, field) {
-  return spans.map(([a, b], k) => `<div class="clip-row" data-field="${field}" data-k="${k}">
+const BEAT_WORD = { setup: "Setup", clash: "Clash", turn: "Turn", payoff: "Payoff" };
+const WHO_WORD = { caller: "Caller", elijah: "Elijah", both: "Both", unsure: "" };
+function beatChip(m) {
+  if (!m || !m.beat) return "";
+  const who = WHO_WORD[m.speaker] || "";
+  return `<span class="beat ${esc(m.beat)}" title="${esc(BEAT_WORD[m.beat])}${who ? " · " + esc(who) : ""}">${esc(BEAT_WORD[m.beat])}${who ? " · " + esc(who) : ""}</span>`;
+}
+function clipRows(spans, field, beats) {
+  const labels = Array.isArray(beats) && beats.length === spans.length ? beats : null;
+  return spans.map(([a, b], k) => `<div class="clip-row" data-field="${field}" data-k="${k}">${labels ? beatChip(labels[k]) : ""}
       <input class="tin" data-part="0" value="${fmt(a)}" aria-label="Clip ${k + 1} start"> to
       <input class="tin" data-part="1" value="${fmt(b)}" aria-label="Clip ${k + 1} end">
       <span class="len">${(b - a).toFixed(1)} s</span>
@@ -603,6 +639,8 @@ function longCard(c) {
       <div class="chips">${c.rank ? `<span class="chip rank">${esc(c.rank.toLowerCase())}</span>` : ""}${stateChip(c)}<button class="btn small" data-full>Preview</button><button class="btn small" data-chat>Tell the editor</button></div>
     </div>
     ${c.problems.length ? `<ul class="problems-list">${c.problems.map(p => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
+    ${structNotes(c)}
+    ${(c.self_defeats || []).map(d => defeatBox(d, (c.self_defeats.length > 1 ? "Where his argument defeats itself" : "Where his argument defeats itself"))).join("")}
     ${c.render === "stale" && files.video ? `<p class="stale-note">You changed this after it was rendered. Render it again to update the video, captions and editor timeline.</p>` : ""}
     ${files.video ? "" : `<div class="prep">${(() => { const k = (c.cold_open || [])[0] || [c.start, c.start + 20];
         return upcomingTile(k[0] + 0.5, k[0], k[1], c.guest, "Not rendered yet · watch the full preview"); })()}`}
@@ -613,14 +651,14 @@ function longCard(c) {
           <button class="btn small" data-hear="${c.start}|${c.start + 20}">Hear start</button>
           <button class="btn small" data-hear="${c.end - 20}|${c.end}">Hear end</button></div></div>
       <div><div class="lab">Cold open <small>${coldLen.toFixed(0)} s, aim for about 30</small></div>
-        ${clipRows(c.cold_open || [], "cold_open")}
+        ${clipRows(c.cold_open || [], "cold_open", c.cold_open_beats)}
         <button class="btn small" data-add="cold_open">Add a clip</button></div>
     </div>${files.video ? "" : "</div>"}
     ${rendered}</article>`;
 }
 
 const FRAMINGS = [["auto", "Auto"], ["host", "Host only"], ["full", "Full frame (Scripture)"], ["split", "Split screen"], ["guest", "Caller photo (audio-only guest)"]];
-const CATS = ["Roast", "Argument Win", "Explainer", "Testimony", "Pastoral"];
+const CATS = ["Self-Defeat", "Roast", "Argument Win", "Explainer", "Testimony", "Pastoral"];
 function shortCard(s) {
   const m = f => `/media/${encodeURIComponent(P.id)}/${f}`;
   const len = (s.pieces || []).reduce((t, [a, b]) => t + b - a, 0);
@@ -629,18 +667,21 @@ function shortCard(s) {
     <div class="card-top">
       <label class="include"><input type="checkbox" data-select ${s.selected ? "checked" : ""}> Render</label>
       <div class="name"><input class="guest" value="${esc(s.hook)}" aria-label="Hook text" data-text="hook">
+        ${s.topic ? `<div class="topic-line"><b>Debating:</b> ${esc(s.topic)}</div>` : ""}
         <div style="color:var(--mist);font-size:14px">${esc(s.why || "")}</div></div>
       <div class="chips">${stateChip(s)}<button class="btn small" data-full>Preview</button><button class="btn small" data-chat>Tell the editor</button></div>
     </div>
     ${s.problems.length ? `<ul class="problems-list">${s.problems.map(p => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
     ${(s.issues || []).length ? `<ul class="problems-list" style="color:var(--gold)">${s.issues.map(p => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
+    ${structNotes(s)}
     <div class="short-grid">
       ${files.video ? `<video controls preload="metadata" src="${m(files.video)}"></video>`
         : (s.pieces || []).length ? upcomingTile(s.pieces[0][0] + 0.5, s.pieces[0][0], s.pieces[0][1], s.hook, "Not rendered yet · watch the full preview")
         : `<div class="vert-ph">No clips yet</div>`}
       <div>
         <div class="field"><div class="lab">Clips, played in order <small>${len.toFixed(0)} s before pauses are tightened</small></div>
-          ${clipRows(s.pieces || [], "pieces")}<button class="btn small" data-add="pieces">Add a clip</button></div>
+          ${clipRows(s.pieces || [], "pieces", s.beats)}<button class="btn small" data-add="pieces">Add a clip</button></div>
+        ${s.self_defeat ? defeatBox(s.self_defeat) : ""}
         <div class="field" style="display:flex;gap:20px;flex-wrap:wrap">
           <label><div class="lab">Framing</div><select data-framing>${FRAMINGS.map(([v, l]) => `<option value="${v}" ${s.framing === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
           <label><div class="lab">Category</div><select data-category>${CATS.map(c => `<option ${s.category === c ? "selected" : ""}>${c}</option>`).join("")}</select></label>
@@ -730,16 +771,20 @@ function wireCard(card) {
     if (field === "span") patch(id, { start: spans[0][0], end: spans[0][1] }).catch(e => alert(e.message));
     else patch(id, { [field]: spans }).catch(e => alert(e.message));
   });
+  const labelsOf = (it, field) => { const k = field === "pieces" ? "beats" : "cold_open_beats", l = it[k];
+    return Array.isArray(l) && l.length === (it[field] || []).length ? [k, l] : [k, null]; };
   $$("[data-remove]", card).forEach(b => b.onclick = () => {
-    const [field, k] = b.dataset.remove.split("|");
-    const spans = (item()[field] || []).filter((_, j) => j !== +k);
-    patch(id, { [field]: spans });
+    const [field, k] = b.dataset.remove.split("|"), it = item();
+    const spans = (it[field] || []).filter((_, j) => j !== +k);
+    const [lk, labels] = labelsOf(it, field);              // the clip's beat label goes with it
+    patch(id, labels ? { [field]: spans, [lk]: labels.filter((_, j) => j !== +k) } : { [field]: spans });
   });
   $$("[data-add]", card).forEach(b => b.onclick = () => {
     const field = b.dataset.add, it = item(), spans = [...(it[field] || [])];
     const from = spans.length ? spans[spans.length - 1][1] + 30 : (it.start ?? 0) + 60;
     spans.push([from, from + 8]);
-    patch(id, { [field]: spans });
+    const [lk, labels] = labelsOf(it, field);
+    patch(id, labels ? { [field]: spans, [lk]: [...labels, { beat: "clash", speaker: "unsure" }] } : { [field]: spans });
   });
   $$("[data-hear]", card).forEach(b => b.onclick = () => {
     const [a, c] = b.dataset.hear.split("|").map(Number);
