@@ -269,6 +269,11 @@ body.chat-open .drawer { right: 420px; }
 .rules-list small { display: block; }
 
 dialog { background: var(--deck); color: var(--paper); border: 1px solid var(--rule); border-radius: var(--radius-m); padding: 26px; width: min(560px, 92vw); }
+.updnote { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--deck); color: var(--paper); border: 1px solid var(--rule); border-radius: 999px; padding: 10px 18px; z-index: 50; box-shadow: 0 6px 24px rgba(0,0,0,.35); }
+.railfoot { margin-top: auto; display: flex; flex-direction: column; gap: 8px; }
+#udlg .ver { color: var(--mist); font-size: 13px; margin: 4px 0 0; }
+#udlg .what { background: var(--night); border: 1px solid var(--rule); border-radius: var(--radius-s); padding: 10px 12px; margin: 12px 0 0; }
+#udlg .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
 dialog::backdrop { background: rgba(5, 9, 16, .7); }
 .drop { display: block; border: 2px dashed var(--rule); border-radius: var(--radius-m); padding: 30px 18px; text-align: center; color: var(--mist); margin: 16px 0; cursor: pointer; }
 .drop.over { border-color: var(--gold); color: var(--paper); }
@@ -304,7 +309,10 @@ dialog::backdrop { background: rgba(5, 9, 16, .7); }
     <button class="add" id="add">Add a recording</button>
     <button class="btn" id="chat-open">Ask the editor</button>
     <ul class="lives" id="lives"></ul>
-    <button class="btn" id="settings-btn" style="margin-top:auto">Settings</button>
+    <div class="railfoot">
+      <button class="btn" id="update-btn" title="Reload the app and get the newest version if there is one">Refresh &amp; update</button>
+      <button class="btn" id="settings-btn">Settings</button>
+    </div>
   </nav>
   <main id="main" tabindex="-1"></main>
 </div>
@@ -358,6 +366,13 @@ dialog::backdrop { background: rgba(5, 9, 16, .7); }
   <p style="color:var(--mist);font-size:13px;margin:6px 0 0">YouTube's copy is lower quality and has one mixed audio track, so your OBS file gives better results when you have it.</p>
   <div class="err" id="err" role="alert"></div>
   <div style="text-align:right;margin-top:10px"><button class="btn" id="close">Close</button></div>
+</dialog>
+
+<dialog id="udlg" aria-labelledby="udlg-h">
+  <h2 id="udlg-h">Refresh &amp; update</h2>
+  <div id="udlg-body" aria-live="polite"></div>
+  <div class="err" id="udlg-err" role="alert"></div>
+  <div class="row" id="udlg-row"></div>
 </dialog>
 
 <dialog id="sdlg" aria-labelledby="sdlg-h">
@@ -1079,6 +1094,72 @@ function openChat(focusId) {
   showChatCtx(); drawChat(); $("#chat-input").focus();
 }
 $("#chat-open").onclick = () => openChat(null);
+
+// ---------- refresh & update ----------
+const udlg = $("#udlg");
+const verDate = d => d ? new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "";
+function reloadPage(note) {
+  try { sessionStorage.setItem("cs-note", note || ""); } catch (e) {}
+  location.reload();
+}
+async function waitForRestart() {
+  const t0 = Date.now();
+  await new Promise(r => setTimeout(r, 2500));          // let the old version close first
+  while (Date.now() - t0 < 180000) {
+    try { const r = await fetch("/api/health", { cache: "no-store" }); if (r.ok) return true; } catch (e) {}
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  return false;
+}
+$("#update-btn").onclick = async () => {
+  const body = $("#udlg-body"), row = $("#udlg-row"), err = $("#udlg-err");
+  err.textContent = ""; row.innerHTML = "";
+  body.innerHTML = "<p>Checking for a newer version...</p>";
+  udlg.showModal();
+  let info;
+  try { info = await api("/api/update"); }
+  catch (e) {
+    body.innerHTML = `<p>Couldn't check for a newer version right now.</p><p class="ver">${esc(e.message)}</p>`;
+    row.innerHTML = `<button class="btn" id="u-close">Close</button><button class="btn primary" id="u-reload">Just refresh the page</button>`;
+    $("#u-close").onclick = () => udlg.close();
+    $("#u-reload").onclick = () => reloadPage("");
+    return;
+  }
+  if (!info.update_available) {
+    udlg.close();
+    reloadPage(`You have the newest version (${verDate(info.current.date)}).`);
+    return;
+  }
+  const cur = info.current.sha ? `Yours is from ${verDate(info.current.date)}.` : "This copy doesn't know its version yet; updating once fixes that.";
+  body.innerHTML = `<p><strong>A newer version is ready</strong> (${verDate(info.latest.date)}).</p>
+    <p class="ver">${cur}</p>
+    <p class="what">Latest change: ${esc(info.latest.message)}</p>
+    <p class="ver">Your lives, edits, renders, settings and downloaded models stay exactly as they are. Clip Studio restarts by itself and this page reloads, usually within a minute.</p>`;
+  row.innerHTML = `<button class="btn" id="u-close">Not now</button><button class="btn primary" id="u-go">Update now</button>`;
+  $("#u-close").onclick = () => udlg.close();
+  $("#u-go").onclick = async () => {
+    row.innerHTML = ""; err.textContent = "";
+    body.innerHTML = "<p>Downloading the new version...</p>";
+    try { await api("/api/update", { method: "POST" }); }
+    catch (e) {
+      err.textContent = e.message;
+      row.innerHTML = `<button class="btn" id="u-close">Close</button>`;
+      $("#u-close").onclick = () => udlg.close();
+      return;
+    }
+    body.innerHTML = "<p>Updated. Restarting Clip Studio...</p>";
+    if (await waitForRestart()) reloadPage("Updated to the newest version.");
+    else body.innerHTML = "<p>Clip Studio hasn't come back yet. Close its window, then double-click Open Clip Studio again.</p>";
+  };
+};
+(() => {                                                   // the note left by a refresh, shown once
+  let note = ""; try { note = sessionStorage.getItem("cs-note") || ""; sessionStorage.removeItem("cs-note"); } catch (e) {}
+  if (!note) return;
+  const n = document.createElement("div");
+  n.className = "updnote"; n.setAttribute("role", "status"); n.textContent = note;
+  document.body.appendChild(n);
+  setTimeout(() => n.remove(), 5000);
+})();
 $("#chat-close").onclick = () => { chatEl.hidden = true; document.body.classList.remove("chat-open"); };
 $("#chat-clear").onclick = async () => { if (P) { await api(`/api/projects/${encodeURIComponent(P.id)}/chat/clear`, { method: "POST" }); drawChat(); } };
 $("#chat-input").onkeydown = e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#chat-form").requestSubmit(); } };

@@ -26,23 +26,33 @@ fi
 
 printf "\033[1mStarting Clip Studio...\033[0m\n"
 echo "Keep this window open while you use it. Close it to stop Clip Studio."
-NO_BROWSER=1 .venv/bin/python app/server.py &
-PID=$!
 trap 'kill $PID 2>/dev/null' EXIT INT TERM HUP
-
-for _ in $(seq 1 90); do
-  if curl -fs "$URL/api/health" >/dev/null 2>&1; then
-    open "$URL"
-    wait $PID
-    exit 0
+export CLIPSTUDIO_LAUNCHER=1       # "Refresh & update" exits with code 3 to be started again on the new version
+FIRST=1
+while true; do
+  NO_BROWSER=1 .venv/bin/python app/server.py &
+  PID=$!
+  if [ "$FIRST" = 1 ]; then
+    FIRST=0
+    READY=0
+    for _ in $(seq 1 90); do
+      if curl -fs "$URL/api/health" >/dev/null 2>&1; then READY=1; open "$URL"; break; fi
+      if ! kill -0 $PID 2>/dev/null; then break; fi
+      sleep 1
+    done
+    if [ "$READY" = 0 ] && kill -0 $PID 2>/dev/null; then
+      echo "Clip Studio is taking unusually long to start. Leave this window open and go to $URL in your browser."
+    fi
   fi
-  if ! kill -0 $PID 2>/dev/null; then
+  wait $PID
+  CODE=$?
+  if [ "$CODE" = 3 ]; then
     echo
-    echo "Clip Studio stopped while starting. The message above says why. Send a screenshot of this window to Elijah."
-    read -r -p "Press Return to close this window."
-    exit 1
+    echo "Updated. Starting the new version..."
+    continue
   fi
-  sleep 1
+  echo
+  echo "Clip Studio stopped. If that wasn't on purpose, the message above says why. Send a screenshot of this window to Elijah."
+  read -r -p "Press Return to close this window."
+  exit "$CODE"
 done
-echo "Clip Studio is taking unusually long to start. Leave this window open and go to $URL in your browser."
-wait $PID

@@ -21,7 +21,20 @@ if not errorlevel 1 (
 
 echo Starting Clip Studio... it opens in your browser when it's ready.
 echo Keep this window open while you use it. Close it to stop Clip Studio.
-".venv\Scripts\python.exe" app\server.py
-echo.
-echo Clip Studio stopped. If that wasn't on purpose, take a screenshot of this window and send it to Elijah.
-pause
+rem Refresh & update restarts it with exit code 3. The whole block is read before it runs,
+rem so the update can replace this file safely while Clip Studio is open.
+set CLIPSTUDIO_LAUNCHER=1
+:run
+(
+  ".venv\Scripts\python.exe" app\server.py
+  if errorlevel 3 if not errorlevel 4 (
+    echo.
+    echo Updated. Starting the new version...
+    set NO_BROWSER=1
+    goto run
+  )
+  echo.
+  echo Clip Studio stopped. If that wasn't on purpose, take a screenshot of this window and send it to Elijah.
+  pause
+  exit /b
+)
