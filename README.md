@@ -17,6 +17,14 @@ downloaded file. The installers install Homebrew/winget packages (Python 3.12, F
 Python folder (`.venv`) inside the Clip Studio folder, download the models, and run the setup check.
 Each copy of Clip Studio keeps its own projects; copies don't sync with each other.
 
+**Getting the newest version:** press **Refresh & update** (bottom left). It checks GitHub; if there's a
+newer version it shows the latest change and **Update now** downloads it, keeps `projects/` (lives,
+edits, renders, settings, API key), `models/`, `.venv/` and downloaded fonts, reinstalls Python packages
+only if `requirements.txt` changed, restarts and reloads the page. Already up to date: it just refreshes
+the page. It refuses while something is analyzing or rendering. A copy made with `git clone` updates
+with `git pull --ff-only` instead. (Copies downloaded before this button existed need one more
+download to get it.)
+
 ## Setup by hand (Mac or Windows, one time)
 
 1. Install Python 3.11+ and FFmpeg.
@@ -165,6 +173,7 @@ python -m pytest -q tests          # regression tests, ~10 seconds, no models ne
 | `engine/export_timeline.py` | FCP7 XML for Resolve and Premiere: cuts against the original file, a marker at every trimmed pause |
 | `engine/metadata.py` | Titles, description, chapters (on the final cut), tags |
 | `engine/thumbnail.py` | 1280x720 thumbnails in the channel's style |
+| `engine/updater.py` | Refresh & update: version check against GitHub, safe in-place update that keeps your work |
 | `engine/fetch_youtube.py` | Gets your video from a YouTube link (keep current: `pip install -U yt-dlp`) |
 | `app/` | The local app: `server.py` (queue, API) and `static/index.html` (the interface) |
 
@@ -175,4 +184,3 @@ python -m pytest -q tests          # regression tests, ~10 seconds, no models ne
   YouTube downloads have one mixed track.
 - Speaker labels per OBS audio track aren't used yet; on one mixed track captions don't say who's talking.
 - The sting and outro are marked as gaps in the editor timeline until their files are set in Settings.
-- No one-click installer yet.
