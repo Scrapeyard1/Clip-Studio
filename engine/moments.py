@@ -40,12 +40,12 @@ From the timestamped transcript of the whole live, return ONLY a JSON object wit
   "topic": the question being debated, as one plain sentence,
   "kind": "debate" (the caller argues against Elijah's position) | "question" (a sincere question) |
      "friendly" (chat, thanks, shout-outs),
-  "video": true if this should be its own long-form video. Elijah's choices: yes for a real debate where
-     the guest argues from outside the faith (Muslim, atheist, Hebrew Israelite, oneness, Quran-only,
-     skeptic) or presses a challenge, with sustained back-and-forth, usually 10+ minutes; no for sincere
+  "video": true if this debate is good enough for a long-form video, judged on quality, not length (the
+     app applies Elijah's length rules: short ones become shorts or are combined in pairs). Yes for a
+     real debate where the guest argues from outside the faith (Muslim, atheist, Hebrew Israelite,
+     oneness, Quran-only, skeptic) or presses a challenge, with sustained back-and-forth; no for sincere
      questions and in-house Christian discussions (Catholic/Protestant questions, advice, pastoral),
-     friendly chats, calls under about 8 minutes, and calls that never get going (bad audio, guest leaves
-     early, mostly off topic).
+     friendly chats, and calls that never get going (bad audio, guest leaves early, mostly off topic).
   "video_reason": one short line on why or why not,
   "rank": "STRONG" | "MEDIUM" | "WEAK", "summary" (2 sentences),
   "titles": 3 options in the channel's style: who the guest is + the conflict + one or two CAPITALIZED
@@ -83,7 +83,9 @@ prompted it, turn = the payoff.
   "against_at": seconds, "kind": "contradiction" | "admission" | "double standard" | "undercuts itself",
   "caught_at": seconds where Elijah points it out (or null), "explain": one plain sentence}.
   Copy the words exactly as they appear in the transcript. Being confused, silent, rude or losing is NOT
-  a self-defeat. Return [] if there is none; never invent one.
+  a self-defeat, and neither is a caller clarifying himself or words that were really Elijah's. List only
+  ones you'd stand behind on screen: if you'd call it weak, leave it out. Return [] if there is none;
+  never invent one.
 
 "cold_open": the preview that plays before the title sequence, built the way Elijah builds his:
   - ONE continuous stretch of the real conversation, 30-45 s (aim for about 40; never over 45). Never stitch short

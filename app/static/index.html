@@ -120,6 +120,10 @@ h2 { font: 400 30px/1 "Anton", sans-serif; margin: 0 0 6px; letter-spacing: .3px
 .chip { font-weight: 700; font-size: 12px; padding: 3px 9px; border-radius: 99px; white-space: nowrap; }
 .chip.rank { background: var(--gold); color: #1B1300; }
 .chip.pick { background: var(--ok); color: #06210E; }
+.part-row { display: flex; gap: 10px; align-items: center; margin: 6px 0; flex-wrap: wrap; }
+.part-row .when { color: var(--mist); font-variant-numeric: tabular-nums; }
+.combine { display: flex; gap: 8px; align-items: center; margin-top: 10px; color: var(--mist); font-size: 14px; flex-wrap: wrap; }
+.combine select { max-width: 100%; }
 .chip.skip { background: var(--deck-2); color: var(--mist); border: 1px solid var(--rule); }
 .cliff { margin: 8px 0 0; font-size: 14px; color: var(--paper); }
 .cliff q { color: var(--gold); }
@@ -525,7 +529,7 @@ function statusBox() {
 }
 
 function head() {
-  const n = P.items.filter(i => i.kind === "long").length, s = P.items.filter(i => i.kind === "short").length;
+  const n = P.items.filter(i => i.kind === "long" && !i.combo).length, s = P.items.filter(i => i.kind === "short").length;
   const pics = P.pictures || {}, m = f => `/media/${encodeURIComponent(P.id)}/${f}`;
   const hero = !P.items.length && pics.poster
     ? `<div class="hero"><img src="${m(pics.poster)}" alt="A frame from the recording"><span class="tag">Upcoming</span>
@@ -559,10 +563,11 @@ function liveMap(longs) {
   const marks = []; for (let t = 0; t <= D; t += 1800) marks.push(t);
   return `<section class="map" aria-label="The whole live">
     <div class="map-scale">${marks.map(t => `<span style="left:${pct(t)}">${short(t)}</span>`).join("")}</div>
-    <div class="map-track">${longs.map(c => {
+    <div class="map-track">${longs.filter(c => !c.combo).map(c => {
+      const inSel = P.items.some(x => x.combo && x.selected && (x.members || []).includes(c.id));
       const w = 100 * (c.end - c.start) / D;
       const notches = (c.cold_open || []).map(([a, b]) => `<span class="notch" style="left:${(100 * (a - c.start) / (c.end - c.start)).toFixed(2)}%;width:${Math.max(.6, 100 * (b - a) / (c.end - c.start)).toFixed(2)}%"></span>`).join("");
-      return `<button class="seg ${c.selected ? "sel" : ""} ${c.render === "done" ? "done" : ""} ${w < 7 ? "narrow" : ""}" style="left:${pct(c.start)};width:${w.toFixed(3)}%"
+      return `<button class="seg ${c.selected || inSel ? "sel" : ""} ${c.render === "done" ? "done" : ""} ${w < 7 ? "narrow" : ""}" style="left:${pct(c.start)};width:${w.toFixed(3)}%"
         title="${esc(c.guest)}: ${esc(c.topic)} (${short(c.start)} to ${short(c.end)})" data-go="${esc(c.id)}">${notches}
         <div class="g">${esc(c.guest)}</div><div class="tp">${esc(c.topic)}</div></button>`; }).join("")}</div></section>`;
 }
@@ -656,7 +661,7 @@ function longCard(c) {
       <label class="include"><input type="checkbox" data-select ${c.selected ? "checked" : ""}> Render</label>
       <div class="name"><input class="guest" value="${esc(c.guest)}" aria-label="Guest name" data-text="guest">
         <input class="topic" value="${esc(c.topic)}" aria-label="Topic" data-text="topic"></div>
-      <div class="chips">${c.video != null ? `<span class="chip ${c.video ? "pick" : "skip"}" title="${esc(c.video_reason || "")}">${c.video ? "video pick" : "shorts only"}</span>` : ""}${c.rank ? `<span class="chip rank">${esc(c.rank.toLowerCase())}</span>` : ""}${stateChip(c)}<button class="btn small" data-full>Preview</button><button class="btn small" data-chat>Tell the editor</button></div>
+      <div class="chips">${c.combo ? `<span class="chip pick" title="${esc(c.video_reason || "")}">combined video</span>` : c.in_combo ? `<span class="chip skip">in a combined video</span>` : c.video != null ? `<span class="chip ${c.video ? "pick" : "skip"}" title="${esc(c.video_reason || "")}">${c.video ? "video pick" : "shorts only"}</span>` : ""}${c.rank ? `<span class="chip rank">${esc(c.rank.toLowerCase())}</span>` : ""}${stateChip(c)}<button class="btn small" data-full>Preview</button><button class="btn small" data-chat>Tell the editor</button></div>
     </div>
     ${c.problems.length ? `<ul class="problems-list">${c.problems.map(p => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
     ${structNotes(c)}
@@ -665,11 +670,17 @@ function longCard(c) {
     ${files.video ? "" : `<div class="prep">${(() => { const k = (c.cold_open || [])[0] || [c.start, c.start + 20];
         return upcomingTile(k[0] + 0.5, k[0], k[1], c.guest, "Not rendered yet · watch the full preview"); })()}`}
     <div class="times">
-      <div><div class="lab">Conversation <small>${short(c.end - c.start)} long</small></div>
+      ${c.combo ? `<div><div class="lab">Two conversations, back to back <small>${short(c.parts.reduce((t, [a, b]) => t + b - a, 0))} in all</small></div>
+        ${c.parts.map(([a, b], k) => { const m = P.items.find(x => x.id === c.members[k]) || {};
+          return `<div class="part-row"><span>${k + 1}. ${esc(m.guest || "")}</span> <span class="when">${fmt(a)} to ${fmt(b)} (${short(b - a)})</span>
+            <button class="btn small" data-go-card="${esc(m.id || "")}">Change times</button></div>`; }).join("")}
+        <button class="btn small" data-split>Split apart</button></div>`
+      : `<div><div class="lab">Conversation <small>${short(c.end - c.start)} long</small></div>
         <div class="clip-row" data-field="span"><input class="tin" data-part="0" value="${fmt(c.start)}" aria-label="Starts"> to
           <input class="tin" data-part="1" value="${fmt(c.end)}" aria-label="Ends">
           <button class="btn small" data-hear="${c.start}|${c.start + 20}">Hear start</button>
-          <button class="btn small" data-hear="${c.end - 20}|${c.end}">Hear end</button></div></div>
+          <button class="btn small" data-hear="${c.end - 20}|${c.end}">Hear end</button></div>
+        ${combineControl(c)}</div>`}
       <div><div class="lab">Cold open <small>${coldLen.toFixed(0)} s, aim for 30-45, ending on an open question</small></div>
         ${clipRows(c.cold_open || [], "cold_open", c.cold_open_beats)}
         ${c.cold_open_ends_on ? `<p class="cliff">Ends on: <q>${esc(c.cold_open_ends_on)}</q></p>` : ""}
@@ -751,6 +762,7 @@ function renderBar() {
 async function patch(id, changes) {
   const updated = await api(`/api/projects/${encodeURIComponent(P.id)}/items/${encodeURIComponent(id)}`, jsonOpts("PATCH", changes));
   const k = P.items.findIndex(i => i.id === id);
+  if (updated.combo || updated.in_combo) { open(P.id, true); return updated; }   // the combined video follows its parts
   P.items[k] = updated;
   const card = document.getElementById("c-" + id);
   const focusSel = document.activeElement && card.contains(document.activeElement) ? null : null;
@@ -779,11 +791,32 @@ function wire() {
   };
 }
 
+/* Elijah's rule: debates of 15 minutes or less are shorts, unless two of them make one video together */
+const COMBINE_MAX = 15 * 60;
+function combineControl(c) {
+  if (c.in_combo || c.end - c.start > COMBINE_MAX) return "";
+  const free = P.items.filter(x => x.kind === "long" && !x.combo && !x.in_combo && x.id !== c.id && x.end - x.start <= COMBINE_MAX);
+  if (!free.length) return "";
+  return `<label class="combine">Make one video with
+    <select data-combine><option value="">choose another short conversation</option>
+      ${free.map(x => `<option value="${esc(x.id)}">${esc(x.guest)} (${short(x.end - x.start)})</option>`).join("")}</select></label>`;
+}
+
 function wireCard(card) {
   const id = card.dataset.id, item = () => P.items.find(i => i.id === id);
   const spansFrom = field => $$(`.clip-row[data-field="${field}"]`, card).map(r => $$(".tin", r).map(i => parseT(i.value)));
   const valid = spans => spans.every(([a, b]) => a >= 0 && b > a);
   card.querySelector("[data-select]").onchange = e => patch(id, { selected: e.target.checked });
+  const cmb = $("[data-combine]", card); if (cmb) cmb.onchange = async () => {
+    if (!cmb.value) return;
+    try { await api(`/api/projects/${encodeURIComponent(P.id)}/combine`, jsonOpts("POST", { ids: [id, cmb.value] })); open(P.id, true); }
+    catch (e) { alert(e.message); }
+  };
+  const spl = $("[data-split]", card); if (spl) spl.onclick = async () => {
+    try { await api(`/api/projects/${encodeURIComponent(P.id)}/split`, jsonOpts("POST", { id })); open(P.id, true); }
+    catch (e) { alert(e.message); }
+  };
+  $$("[data-go-card]", card).forEach(b => b.onclick = () => document.getElementById("c-" + b.dataset.goCard)?.scrollIntoView({ behavior: "smooth" }));
   $$("[data-text]", card).forEach(inp => inp.onchange = () => patch(id, { [inp.dataset.text]: inp.value.trim() }));
   $$(".clip-row .tin", card).forEach(inp => inp.onchange = () => {
     const row = inp.closest(".clip-row"), field = row.dataset.field;

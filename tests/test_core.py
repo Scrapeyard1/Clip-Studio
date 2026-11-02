@@ -866,3 +866,65 @@ def test_video_picks_preselect_and_short_calls_are_shorts_only(app_client, tmp_p
 def test_glitch_transition_can_be_turned_off():
     import render_long
     assert "rgbashift" in render_long.glitch({}) and render_long.glitch({"transition": "cut"}) == ""
+
+
+# ---------- two short debates, one video (Elijah: 15 min or less is shorts, unless paired) ----------
+def test_short_debates_pair_into_one_video():
+    from plan_check import validate
+    m = 60
+    conv = lambda g, a, mins, rank="STRONG": {"guest": g, "start": a, "end": a + mins * m, "rank": rank, "video": True,
+                                             "cold_open": [{"start": a + 60, "end": a + 100}], "titles": [f"{g} title"]}
+    clean, _ = validate({"conversations": [conv("A", 0, 12, "MEDIUM"), conv("B", 800, 11), conv("Long", 1600, 30),
+                                           conv("C", 3500, 13), conv("Tiny", 4400, 5)]}, 6000)
+    v = {c["guest"]: c for c in clean["conversations"]}
+    assert v["Long"]["video"] and not any(v[g]["video"] for g in ("A", "B", "C", "Tiny"))
+    assert clean["combos"] == [{"ids": [v["A"]["id"], v["B"]["id"]], "cold_open": v["B"]["cold_open"],
+                                "cold_open_beats": None, "cold_open_ends_on": None, "cold_open_ends_at": None,
+                                "cold_open_why": "", "titles": ["B title"],
+                                "reason": "Two short debates combined into one video: A and B."}]   # stronger call's preview
+    assert "Combined with B" in v["A"]["video_reason"] and "15 minutes or less" in v["C"]["video_reason"]
+    assert "Under 8 minutes" in v["Tiny"]["video_reason"]
+
+
+def test_combined_video_follows_its_parts_and_can_be_split(app_client, tmp_path):
+    server, client = app_client
+    pid = server.new_project("Test live", source=make_video(str(tmp_path / "src.mp4"), 4))
+    d = server.pdir(pid)
+    os.makedirs(os.path.join(d, "work"), exist_ok=True)
+    media.write_json(os.path.join(d, "work", "transcript.json"), {"duration": 4000, "segments": []})
+    media.write_json(os.path.join(d, "work", "plan.json"), {"conversations": [
+        {"id": "c100", "guest": "A", "topic": "t1", "start": 100, "end": 800, "cold_open": [[700, 740]], "video": False},
+        {"id": "c900", "guest": "B", "topic": "t2", "start": 900, "end": 1600, "cold_open": [[1500, 1540]], "video": False},
+        {"id": "c2000", "guest": "C", "topic": "t3", "start": 2000, "end": 2600, "cold_open": [[2500, 2540]], "video": False}],
+        "shorts": [], "combos": [{"ids": ["c100", "c900"], "cold_open": [[1500, 1540]], "titles": ["B vs A"]}]})
+    items = {i["id"]: i for i in client.get(f"/api/projects/{pid}").json()["items"]}
+    m = items["m-c100-c900"]
+    assert m["parts"] == [[100, 800], [900, 1600]] and m["guest"] == "A + B" and m["selected"] is True
+    assert not items["c100"]["selected"] and items["c100"]["in_combo"] == "m-c100-c900"
+    client.patch(f"/api/projects/{pid}/items/c900", json={"end": 1650})            # edit a part: the video follows
+    m = next(i for i in client.get(f"/api/projects/{pid}").json()["items"] if i["id"] == "m-c100-c900")
+    assert m["parts"][1] == [900, 1650]
+    r = client.patch(f"/api/projects/{pid}/items/m-c100-c900", json={"start": 50})
+    assert r.status_code == 400 and "own card" in r.json()["detail"]
+    assert client.patch(f"/api/projects/{pid}/items/m-c100-c900", json={"cold_open": [[700, 740]]}).status_code == 200
+    v = client.post(f"/api/projects/{pid}/combine", json={"ids": ["c900", "c2000"]}).json()   # B moves to a new pair
+    ids = {i["id"] for i in v["items"]}
+    assert "m-c2000-c900" in ids and "m-c100-c900" not in ids
+    v = client.post(f"/api/projects/{pid}/split", json={"id": "m-c2000-c900"}).json()
+    assert not any(i.get("combo") for i in v["items"])
+    assert client.post(f"/api/projects/{pid}/combine", json={"ids": ["c100", "c100"]}).status_code == 400
+
+
+def test_combined_video_renders_both_parts_back_to_back(tmp_path):
+    import render_long
+    src = make_video(str(tmp_path / "live.mp4"), 120)
+    tr = {"duration": 120, "segments": [{"start": s, "end": s + 3, "text": "words here", "words": [
+        {"w": "words", "s": s, "e": s + 1}, {"w": "here", "s": s + 1, "e": s + 2}]} for s in range(0, 120, 4)]}
+    item = {"name": "m", "start": 0, "end": 110, "parts": [[0, 20], [90, 110]], "cold_open": [[95, 100]]}
+    out = render_long.render(src, tr, item, str(tmp_path / "drafts"), {"preset": "ultrafast"}, quiet=[])
+    t = Timeline.load(out["timeline"])
+    body = [s for s in t.segments if s["kind"] == "body"]
+    assert t.sec(sum(s["out_f"] - s["in_f"] for s in body)) == pytest.approx(40, abs=0.1)   # only the two calls
+    assert t.to_output(50, kinds=("body",)) is None and t.to_output(95, kinds=("body",)) is not None
+    assert abs(media.probe(out["video"])["duration"] - t.seconds) < 0.15
+    assert abs(t.seconds - (5 + 10 + 40 + 4)) < 0.1                       # preview + 10 s title + both calls + outro

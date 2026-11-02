@@ -23,7 +23,7 @@ import tempfile
 import export_timeline
 import media
 import paths
-from cuts import safe_cuts
+from cuts import CutReport, safe_cuts
 from timeline import Timeline, write_srt
 
 CARD_SECONDS = {"sting": 10.0, "outro": 4.0}      # sting = the 10 s title sequence
@@ -148,7 +148,10 @@ def plan_timeline(fps, transcript, item, cfg=None, quiet=None):
     """The finished video's exact sequence (cold open, sting, conversation with pauses trimmed, outro),
     without rendering anything. Used by render() and by the full preview, so both always agree."""
     cfg = cfg or {}
-    rep = safe_cuts(transcript, item["start"], item["end"], "long", item.get("protect", []), quiet)
+    parts = item.get("parts") or [[item["start"], item["end"]]]   # two short debates combined: two parts
+    reps = [safe_cuts(transcript, a, b, "long", item.get("protect", []), quiet) for a, b in parts]
+    rep = CutReport([k for r in reps for k in r.keep], [x for r in reps for x in r.removed],
+                    sum(r.source_len for r in reps), sum(r.output_len for r in reps))
     sting = cfg.get("sting") if cfg.get("sting") and os.path.isfile(cfg["sting"]) else None
     outro = cfg.get("outro") if cfg.get("outro") and os.path.isfile(cfg["outro"]) else None
     tl = Timeline.for_longform(fps, item["cold_open"], rep.keep,
@@ -173,8 +176,11 @@ def render(video, transcript, item, out_dir, cfg=None, quiet=None, timeline_only
     try:
         if not timeline_only:
             pieces, groups = [], []
-            for seg in tl.segments:          # group consecutive segments of the same kind
-                if groups and groups[-1][0] == seg["kind"]:
+            gap = round(30 * fps)
+            for seg in tl.segments:          # group consecutive segments of the same kind (a new group
+                prev = groups[-1][1][-1] if groups else None    # where a combined video jumps to its 2nd call)
+                if groups and groups[-1][0] == seg["kind"] and not (
+                        seg["kind"] == "body" and seg["in_f"] - prev["out_f"] > gap):
                     groups[-1][1].append(seg)
                 else:
                     groups.append((seg["kind"], [seg]))

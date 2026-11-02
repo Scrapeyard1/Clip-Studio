@@ -13,7 +13,15 @@ for live, d in truth.items():
     r = json.load(open(f)); plan = r["plan"]; u = r.get("usage", {})
     tot["cost"] += u.get("in", 0) * 2e-6 + u.get("out", 0) * 10e-6
     convs = plan["conversations"]
+    in_combo = {i for c in plan.get("combos", []) for i in c["ids"]}
+    for c in convs:                                        # half of a combined video counts as picked
+        if c["id"] in in_combo:
+            c["video"] = True
+
     print(f"\n== {live}: planner found {len(convs)} conversations; you made {len(d['videos'])} videos")
+    for cb in plan.get("combos", []):
+        names = [c["guest"] for c in convs if c["id"] in cb["ids"]]
+        print(f"  COMBINED into one video: {' + '.join(names)}")
     used = set()
     for v in d["videos"]:
         tot["videos"] += 1

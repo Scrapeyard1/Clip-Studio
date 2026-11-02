@@ -20,6 +20,7 @@ import re
 MAX_COLD_OPEN = 50.0      # seconds; Elijah's previews run 30-45 (one continuous stretch)
 COLD_OPEN_RANGE = (25.0, 50.0)
 MIN_VIDEO = 8 * 60.0      # shorter conversations are suggested for shorts only
+COMBINE_MAX = 15 * 60.0   # Elijah: 15 min or less is shorts, unless two of them make one video together
 CLIFF_WINDOW = 15.0       # the question a preview ends on must start in its last 15 s
 CLIFF_FINISH = 12.0       # ...or just after it, when the clip stopped mid-question (it's stretched to finish)
 EXTEND = 6.0              # a quoted self-defeat this close outside a clip pulls the clip edge out to it
@@ -275,8 +276,12 @@ def validate(plan, duration, transcript=None):
         reason = str(c.get("video_reason") or "")[:200]
         if video is None:                                   # plans from before "video" existed
             video = rank == "STRONG"
-        if video and span[1] - span[0] < MIN_VIDEO:         # Elijah's shortest long-form is ~12 min
+        pairable = False
+        if video and span[1] - span[0] < MIN_VIDEO:
             video, reason = False, "Under 8 minutes, so better used for shorts than as its own video."
+        elif video and span[1] - span[0] <= COMBINE_MAX:    # good debate, but short: shorts, or half of a video
+            video, pairable = False, True
+            reason = "A good debate, but 15 minutes or less: shorts only, unless it's combined with another short debate."
         convs.append({"id": f"c{int(span[0])}", "guest": who, "topic": str(c.get("topic") or "")[:160],
                       "start": span[0], "end": span[1], "rank": rank, "kind_of_call": kind,
                       "summary": str(c.get("summary") or "")[:600], "cold_open": cold,
@@ -285,13 +290,15 @@ def validate(plan, duration, transcript=None):
                       "video": video,
                       "video_reason": reason,
                       "cold_open_ends_on": ends_on if ends_at is not None else None,
-                      "cold_open_ends_at": ends_at, "cold_open_why": str(c.get("cold_open_why") or "")[:200]})
+                      "cold_open_ends_at": ends_at, "cold_open_why": str(c.get("cold_open_why") or "")[:200],
+                      "_pairable": pairable})
         problems += [f"{who}: {x}" for x in issues]
     convs.sort(key=lambda c: c["start"])
     for a, b in zip(convs, convs[1:]):
         if b["start"] < a["end"]:
             msg = f"overlaps {a['guest']}; check where one ends and the next begins."
             b["issues"].append(msg); problems.append(f"{b['guest']}: {msg}")
+    combos = pair_short_debates(convs)
     for i, s in enumerate(plan.get("shorts") or [], 1):
         if not isinstance(s, dict):
             continue
@@ -344,4 +351,30 @@ def validate(plan, duration, transcript=None):
             item["id"] = f"{base}-{n}"; n += 1
         seen.add(item["id"])
     housekeeping = [h for h in (plan.get("housekeeping") or []) if isinstance(h, dict) and _span([h.get("start"), h.get("end")], duration)]
-    return {"conversations": convs, "shorts": shorts, "housekeeping": housekeeping}, problems
+    return {"conversations": convs, "shorts": shorts, "housekeeping": housekeeping, "combos": combos}, problems
+
+
+COMBO_COPY = ("cold_open", "cold_open_beats", "cold_open_ends_on", "cold_open_ends_at", "cold_open_why", "titles")
+
+
+def stronger(a, b):
+    """The member whose preview and titles a combined video uses: the stronger call, then the longer."""
+    rank = {"STRONG": 3, "MEDIUM": 2, "WEAK": 1}
+    key = lambda c: (bool(c.get("cold_open")), rank.get(c.get("rank"), 0), c["end"] - c["start"])
+    return a if key(a) >= key(b) else b
+
+
+def pair_short_debates(convs):
+    """Good debates of 15 minutes or less, paired in the order they happened: each pair becomes one
+    combined video (Elijah's rule). An odd one out stays shorts only."""
+    pool = [c for c in convs if c.pop("_pairable", False)]
+    combos = []
+    for a, b in zip(pool[0::2], pool[1::2]):
+        top = stronger(a, b)
+        combos.append({"ids": [a["id"], b["id"]], **{k: top.get(k) for k in COMBO_COPY},
+                       "reason": f"Two short debates combined into one video: {a['guest']} and {b['guest']}."})
+        for x, y in ((a, b), (b, a)):
+            x["video_reason"] = f"Combined with {y['guest']} into one video (both are 15 minutes or less)."
+    for c in convs:
+        c.pop("_pairable", None)
+    return combos
