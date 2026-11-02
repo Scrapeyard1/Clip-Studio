@@ -44,7 +44,7 @@ class Timeline:
         for i, (a, b) in enumerate(cold_open):
             t.add_source("cold", a, b, f"Cold open {i + 1}")
         if sting_seconds:
-            t.add_file("sting", sting_src, sting_seconds, "Sting")
+            t.add_file("sting", sting_src, sting_seconds, "Title sequence")
         for a, b in keep:
             t.add_source("body", a, b)
         if outro_seconds:

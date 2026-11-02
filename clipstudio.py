@@ -286,7 +286,7 @@ def cut_plan(d, item, cfg, source=None):
     for seg in tl.segments:
         at = tl.sec(seg["at_f"])
         if seg["src"] != "main":
-            name = {"sting": "Sting", "outro": "Patreon outro"}.get(seg["kind"], seg["kind"].title())
+            name = {"sting": "Title sequence", "outro": "Patreon outro"}.get(seg["kind"], seg["kind"].title())
             chunks.append({"kind": seg["kind"], "seconds": round(tl.sec(seg["out_f"] - seg["in_f"]), 3),
                            "at": round(at, 3), "label": name, "placeholder": seg["src"].startswith("card:")})
             continue

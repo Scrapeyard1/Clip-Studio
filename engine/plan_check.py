@@ -9,14 +9,19 @@ With the transcript it also:
   * verifies every quoted self-defeat against the words actually said near that time (correcting the
     time if it's a little off) and drops any it can't find, so nothing is claimed without evidence.
 
-structure_notes(item) says which of the three beats (setup, clash, turn) a short or cold open is
-missing. It's worked out live from the item, so it stays right after edits.
+structure_notes(item) says which of the three beats (setup, clash, turn) a short is missing, and
+where a cold open strays from how Elijah builds his previews (one 30-45 s stretch that ends on an
+unanswered question). It's worked out live from the item, so it stays right after edits.
 """
 import bisect
 import math
 import re
 
-MAX_COLD_OPEN = 45.0      # seconds; the target is ~30
+MAX_COLD_OPEN = 50.0      # seconds; Elijah's previews run 30-45 (one continuous stretch)
+COLD_OPEN_RANGE = (25.0, 50.0)
+MIN_VIDEO = 8 * 60.0      # shorter conversations are suggested for shorts only
+CLIFF_WINDOW = 15.0       # the question a preview ends on must start in its last 15 s
+CLIFF_FINISH = 12.0       # ...or just after it, when the clip stopped mid-question (it's stretched to finish)
 EXTEND = 6.0              # a quoted self-defeat this close outside a clip pulls the clip edge out to it
 SHORT_RANGE = (8.0, 180.0)
 CATEGORIES = {"Self-Defeat", "Roast", "Argument Win", "Explainer", "Testimony", "Pastoral"}
@@ -113,6 +118,18 @@ def find_quote(quote, at, words, starts, before=12.0, after=25.0, need=0.6):
     return best_t if best >= need and best * len(q) >= min_words else None
 
 
+def _quote_end(quote, t, words, starts):
+    """When the quote that starts at t finishes: the end of its last word."""
+    q = [x for x in (_norm(w) for w in str(quote).split()) if x]
+    i = bisect.bisect_left(starts, t - 0.01)
+    j, k = i, 0
+    while j < len(words) and k < len(q) and words[j]["s"] - t < 30:
+        if _norm(words[j]["w"]) == q[k]:
+            k += 1
+        j += 1
+    return words[max(i, j - 1)]["e"] if words else t
+
+
 def verify_defeat(d, words, starts, span, duration):
     """A self-defeat with both quotes found in the transcript (times corrected), or None."""
     if not isinstance(d, dict):
@@ -149,14 +166,22 @@ def structure_notes(item):
     """Which beats are missing, in plain words. [] when the structure is complete or unknown."""
     notes = []
     if item.get("kind") == "long" or "cold_open" in item and "pieces" not in item:
-        spans, beats = item.get("cold_open") or [], item.get("cold_open_beats")
-        if not spans or not _aligned(spans, beats):
+        spans = item.get("cold_open") or []
+        if not spans:
             return []
-        if beats[0].get("beat") != "setup":
-            notes.append("Cold open doesn't start with the setup (his claim or the question), so viewers "
-                         "won't know what the fight is about.")
-        if item.get("self_defeats") and not any(b.get("beat") == "turn" for b in beats):
-            notes.append("He contradicts himself in this call, but the cold open doesn't tease it.")
+        total = sum(b - a for a, b in spans)
+        if len(spans) > 2:
+            notes.append(f"The cold open jumps between {len(spans)} clips. Your previews are one continuous "
+                         "stretch (two at most), so it feels like a real moment.")
+        if total < COLD_OPEN_RANGE[0]:
+            notes.append(f"The cold open is only {total:.0f} s; your previews run 30-45 s.")
+        elif total > COLD_OPEN_RANGE[1]:
+            notes.append(f"The cold open is {total:.0f} s; trim it to 30-45 s.")
+        if "cold_open_ends_at" in item:                 # plans made before this check don't have it
+            t, end = item.get("cold_open_ends_at"), spans[-1][1]
+            if t is None or not end - CLIFF_WINDOW <= t <= end:
+                notes.append("The cold open doesn't end on an open question or challenge, so there's no "
+                             "pull to keep watching. End it just before the answer.")
         return notes
     spans, beats = item.get("pieces") or [], item.get("beats")
     cat = item.get("category")
@@ -215,10 +240,17 @@ def validate(plan, duration, transcript=None):
             s, meta = _clip(x, duration)
             if s and span[0] <= s[0] and s[1] <= span[1] + 1:
                 cold.append(_snap(s, words, starts)); cold_beats.append(meta)
+        merged, merged_beats = [], []
+        for s_, m_ in zip(cold, cold_beats):              # touching clips are one stretch: one clip
+            if merged and 0 <= s_[0] - merged[-1][1] < 1.0:
+                merged[-1] = [merged[-1][0], max(merged[-1][1], s_[1])]
+            else:
+                merged.append(s_); merged_beats.append(m_)
+        cold, cold_beats = merged, merged_beats
         if not cold:
             issues.append("No usable cold-open clips; pick them in review.")
         elif sum(b - a for a, b in cold) > MAX_COLD_OPEN:
-            issues.append(f"Cold open is {sum(b - a for a, b in cold):.0f} s; trim it to about 30.")
+            issues.append(f"Cold open is {sum(b - a for a, b in cold):.0f} s; trim it to 30-45.")
         raw_defeats = [d for d in (c.get("self_defeats") or []) if isinstance(d, dict)]
         defeats = [v for v in (check_defeat(d, span) for d in raw_defeats) if v]
         dropped = len(raw_defeats) - len(defeats)
@@ -229,11 +261,31 @@ def validate(plan, duration, transcript=None):
         protect = [s for s in (_span(x, duration) for x in (c.get("protect") or [])) if s]
         rank = c.get("rank") if c.get("rank") in ("STRONG", "MEDIUM", "WEAK") else None
         kind = c.get("kind") if c.get("kind") in ("debate", "question", "friendly") else None
+        ends_on = str(c.get("cold_open_ends_on") or "").strip()[:240]
+        ends_at = None
+        if cold and ends_on and words:                  # the question it ends on, really at its end
+            a, b = cold[-1]
+            t = find_quote(ends_on, b, words, starts, before=CLIFF_WINDOW + 10, after=CLIFF_FINISH)
+            if t is not None and b - CLIFF_WINDOW <= t <= b + CLIFF_FINISH:
+                q_end = _quote_end(ends_on, t, words, starts)
+                if q_end > b:                           # the clip stops mid-question: let it finish
+                    cold[-1] = [a, round(min(q_end + 0.3, span[1]), 3)]
+                ends_at = round(t, 2)
+        video = c.get("video") if isinstance(c.get("video"), bool) else None
+        reason = str(c.get("video_reason") or "")[:200]
+        if video is None:                                   # plans from before "video" existed
+            video = rank == "STRONG"
+        if video and span[1] - span[0] < MIN_VIDEO:         # Elijah's shortest long-form is ~12 min
+            video, reason = False, "Under 8 minutes, so better used for shorts than as its own video."
         convs.append({"id": f"c{int(span[0])}", "guest": who, "topic": str(c.get("topic") or "")[:160],
                       "start": span[0], "end": span[1], "rank": rank, "kind_of_call": kind,
                       "summary": str(c.get("summary") or "")[:600], "cold_open": cold,
                       "cold_open_beats": cold_beats if any(m["beat"] for m in cold_beats) else None,
-                      "self_defeats": defeats, "titles": titles[:3], "protect": protect, "issues": issues})
+                      "self_defeats": defeats, "titles": titles[:3], "protect": protect, "issues": issues,
+                      "video": video,
+                      "video_reason": reason,
+                      "cold_open_ends_on": ends_on if ends_at is not None else None,
+                      "cold_open_ends_at": ends_at, "cold_open_why": str(c.get("cold_open_why") or "")[:200]})
         problems += [f"{who}: {x}" for x in issues]
     convs.sort(key=lambda c: c["start"])
     for a, b in zip(convs, convs[1:]):

@@ -1,0 +1,173 @@
+{
+ "10-11": {
+  "videos": [
+   {
+    "start": 1315,
+    "end": 3220,
+    "title": "Zechariah 2: Who Sent Yahweh?",
+    "cold_open": [
+     [
+      3076,
+      3120
+     ]
+    ],
+    "n": 1,
+    "hook": "An unanswered challenge about Yahweh being sent by Yahweh of Hosts. End before the caller answers."
+   },
+   {
+    "start": 4423,
+    "end": 7396,
+    "title": "Atheist Investigates the First Mover Argument",
+    "cold_open": [
+     [
+      4432,
+      4443
+     ],
+     [
+      6010,
+      6018
+     ]
+    ],
+    "n": 2,
+    "hook": "Use the user-selected setup-and-payoff: atheist searches for arguments, then calls this one pretty good while remaining uncertain. The first extract is shortened to retain approximately 20 seconds of spoken dialogue; validate audio pacing."
+   }
+  ],
+  "duration": 9620,
+  "lines": 4137
+ },
+ "10-13": {
+  "videos": [
+   {
+    "start": 1038,
+    "end": 2943,
+    "title": "Does the Quran Contradict Earlier Scripture?",
+    "cold_open": [
+     [
+      2341,
+      2380
+     ]
+    ],
+    "n": 1,
+    "hook": "The critic of Islam argues that the Quran instructs people to judge by earlier revelation, then allegedly fails its own test. End on the opponent requesting an example."
+   }
+  ],
+  "duration": 8175,
+  "lines": 3232
+ },
+ "10-15": {
+  "videos": [
+   {
+    "start": 396,
+    "end": 1125,
+    "title": "Did Islam Preserve the Entire Quran?",
+    "cold_open": [
+     [
+      573,
+      609
+     ]
+    ],
+    "n": 1,
+    "hook": "The caller challenges the evidence, prepares to leave, and is asked whether he wants to see the hadith. End on his acceptance of the challenge."
+   },
+   {
+    "start": 1314,
+    "end": 2008,
+    "title": "Can God Enter His Creation?",
+    "cold_open": [
+     [
+      1771,
+      1812
+     ]
+    ],
+    "n": 2,
+    "hook": "The caller claims God would be bound by time if he entered creation; the exchange becomes tense when Elijah attempts to repeat his point."
+   },
+   {
+    "start": 2158,
+    "end": 5441,
+    "title": "Can Christians Lose Salvation?",
+    "cold_open": [
+     [
+      4715,
+      4754
+     ]
+    ],
+    "n": 3,
+    "hook": "A dialogue on whether sins that distance someone from God put salvation at risk. End before the distinction is resolved."
+   },
+   {
+    "start": 5642,
+    "end": 7073,
+    "title": "Did Jesus Claim the Divine Name?",
+    "cold_open": [
+     [
+      6215,
+      6255
+     ]
+    ],
+    "n": 4,
+    "hook": "The John 8 debate turns on Jesus saying I AM before Abraham. Feature the question about why the crowd sought to stone him."
+   },
+   {
+    "start": 8181,
+    "end": 11758,
+    "title": "Can God Be Both Perfectly Merciful and Perfectly Just?",
+    "cold_open": [
+     [
+      10556,
+      10597
+     ]
+    ],
+    "n": 5,
+    "hook": "Use the question-and-answer about justice and mercy, ending on the problem of what a just judge must do."
+   }
+  ],
+  "duration": 14527,
+  "lines": 6153
+ },
+ "10-31": {
+  "videos": [
+   {
+    "start": 412,
+    "end": 2404,
+    "title": "Was Muhammad Prophesied in the Bible?",
+    "cold_open": [
+     [
+      421,
+      464
+     ]
+    ],
+    "n": 1,
+    "hook": "The Muslim argues Muhammad is prophesied in the Bible. Elijah challenges the consistency of relying on the Bible while rejecting its other teachings."
+   },
+   {
+    "start": 3565,
+    "end": 5452,
+    "title": "Did Daniel Predict the Messiah Before AD 70?",
+    "cold_open": [
+     [
+      4555,
+      4596
+     ]
+    ],
+    "n": 2,
+    "hook": "A date-sensitive messianic prophecy challenge is introduced from Daniel 9, concluding with the AD 70 deadline."
+   },
+   {
+    "start": 7005,
+    "end": 8163,
+    "title": "Does the Quranic Roman Victory Prophecy Work?",
+    "cold_open": [
+     [
+      7733,
+      7774
+     ]
+    ],
+    "n": 3,
+    "hook": "The callers dispute whether the Roman victory described by the Quran fits 622 CE; end with their competing readings unresolved."
+   }
+  ],
+  "duration": 9001,
+  "lines": 3818
+ }
+}

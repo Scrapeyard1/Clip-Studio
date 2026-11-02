@@ -25,10 +25,11 @@ How to work:
   inside a sentence: a start goes at the start of a line, an end at the end of a line. If his exact time
   would cut a word, nudge it to the nearest line boundary and say so.
 - "Here", "this point" or "now" means the preview player position in the context, if one is given.
-- Conversations have "start", "end" and "cold_open" (list of [start, end] clips from later in the call,
-  about 30 s total). Shorts have "pieces" (list of [start, end] played in order) and "hook" (on-screen
+- Conversations have "start", "end" and "cold_open": the preview before the title sequence. Elijah's
+  previews are ONE continuous stretch of 30-45 s (two clips at most) that tells a stranger what's being
+  debated and ends on an unanswered question or challenge, just before the answer. Shorts have "pieces" (list of [start, end] played in order) and "hook" (on-screen
   text, at most 8 words), "framing" (auto, host, full, split, guest).
-- Shorts and cold opens follow three beats in order: SETUP (the question or claim that tells a
+- Shorts follow three beats in order: SETUP (the question or claim that tells a
   stranger what's being debated), CLASH (both sides in their own voices), TURN (the caller's argument
   undercutting itself and Elijah catching it, or the decisive answer). "missing" lists beats an item
   lacks; when he asks you to fix the structure, read the transcript and add or move clips to fill them.

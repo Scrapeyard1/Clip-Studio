@@ -612,9 +612,15 @@ def test_missing_beats_are_named():
     assert structure_notes(whole) == []
     cut_short = dict(whole, pieces=[[110, 113], [116, 118], [122, 125]])
     assert any("isn't fully in the clip" in n for n in structure_notes(cut_short))
-    cold = {"kind": "long", "cold_open": [[122, 125], [104, 107]], "self_defeats": [sd],
-            "cold_open_beats": [{"beat": "clash", "speaker": "both"}, {"beat": "clash", "speaker": "caller"}]}
-    assert len(structure_notes(cold)) == 2                     # no setup first, and the contradiction isn't teased
+    choppy = {"kind": "long", "cold_open": [[122, 125], [104, 107], [130, 133]], "cold_open_ends_at": None}
+    notes = structure_notes(choppy)                            # Elijah's previews: one 30-45 s stretch ending on a question
+    assert len(notes) == 3 and "jumps between 3 clips" in notes[0] and "only 9 s" in notes[1]
+    assert "open question" in notes[2]
+    good = {"kind": "long", "cold_open": [[100, 140]], "cold_open_ends_at": 131.0}
+    assert structure_notes(good) == []
+    assert structure_notes(dict(good, cold_open=[[100, 160]])) == ["The cold open is 60 s; trim it to 30-45 s.",
+        "The cold open doesn't end on an open question or challenge, so there's no pull to keep watching. End it just before the answer."]
+    assert structure_notes({"kind": "long", "cold_open": [[100, 140]]}) == []    # older plans: not nagged
     assert structure_notes({"kind": "short", "category": "Roast", "pieces": [[1, 2]]}) == []   # old plans: no labels, no nagging
 
 
@@ -635,8 +641,8 @@ def test_two_pass_planner_builds_the_structure(monkeypatch):
         return json.dumps({
             "self_defeats": [{"claim": "there is only one God", "claim_at": 117, "against": "but there's two",
                               "against_at": 119, "kind": "contradiction", "caught_at": 122, "explain": "x"}],
-            "cold_open": [{"start": 104, "end": 107, "beat": "setup", "speaker": "caller"},
-                          {"start": 116, "end": 121, "beat": "turn", "speaker": "caller"}],
+            "cold_open": {"start": 100, "end": 133, "beat": "setup", "speaker": "both"},   # one clip, not in a list
+            "cold_open_ends_on": "Well it's hard to explain", "cold_open_why": "He has to explain it.",
             "shorts": [{"category": "Argument Win", "hook": "Two gods?", "strength": 3, "self_defeat": None,
                         "pieces": [{"start": 100, "end": 108, "beat": "setup", "speaker": "both"}]},
                        {"category": "Self-Defeat", "hook": "One God, then TWO", "strength": 3, "self_defeat": 0,
@@ -649,7 +655,9 @@ def test_two_pass_planner_builds_the_structure(monkeypatch):
     assert len(calls) == 3                                     # one map + one per conversation
     assert "SETUP" in calls[1] and "self_defeats" in calls[1]
     conv = next(c for c in clean["conversations"] if c["guest"] == "Black on YT")
-    assert [b["beat"] for b in conv["cold_open_beats"]] == ["setup", "turn"]
+    assert conv["cold_open"] == [[100, 133]] and conv["cold_open_beats"][0]["beat"] == "setup"
+    assert conv["cold_open_ends_at"] == 130 and conv["cold_open_why"] == "He has to explain it."
+    assert conv["video"] is False and "Under 8 minutes" in conv["video_reason"]   # 105 s call: shorts only
     assert conv["self_defeats"][0]["against"] == "but there's two"
     assert clean["shorts"][0]["category"] == "Self-Defeat"     # a proven self-defeat ranks first
     assert clean["shorts"][0]["beats"][2] == {"beat": "turn", "speaker": "elijah"}
@@ -688,17 +696,26 @@ def test_a_quote_just_outside_its_clip_is_pulled_in():
 def test_long_cold_opens_are_sent_back(monkeypatch):
     import claude_api
     import moments
-    answers = [json.dumps({"self_defeats": [], "shorts": [],
-                           "cold_open": [{"start": 100, "end": 130}, {"start": 140, "end": 170}]}),
-               json.dumps({"self_defeats": [], "shorts": [], "cold_open": [{"start": 104, "end": 107, "beat": "setup"}]})]
+    answers = [json.dumps({"self_defeats": [], "shorts": [],      # three fragments: sent back
+                           "cold_open": [{"start": 100, "end": 110}, {"start": 120, "end": 130}, {"start": 140, "end": 150}]}),
+               json.dumps({"self_defeats": [], "shorts": [], "cold_open": [{"start": 100, "end": 180}]}),   # 80 s: sent back
+               json.dumps({"self_defeats": [], "shorts": [], "cold_open": [{"start": 104, "end": 144, "beat": "setup"}]})]
     asked = []
 
     def fake_ask(system, messages, **kw):
         asked.append(messages[-1]["content"])
         return answers.pop(0), {}
     monkeypatch.setattr(claude_api, "ask", fake_ask)
+    with pytest.raises(ValueError, match="30-45 s"):           # two tries per conversation, then it's reported
+        moments._clips_for(TALK, {"guest": "A", "start": 95, "end": 200}, None)
+    assert "one continuous stretch" in asked[1]
+    answers[:] = [json.dumps({"self_defeats": [], "shorts": [], "cold_open": [{"start": 100, "end": 180}]}),
+                  json.dumps({"self_defeats": [], "shorts": [], "cold_open": [{"start": 104, "end": 144, "beat": "setup"}]})]
     out = moments._clips_for(TALK, {"guest": "A", "start": 95, "end": 200}, None)
-    assert "60 s" in asked[1] and out["cold_open"][0]["start"] == 104
+    assert out["cold_open"][0]["start"] == 104
+    answers[:] = [json.dumps({"self_defeats": [], "shorts": [], "cold_open": None})]   # not a video pick: no nagging
+    out = moments._clips_for(TALK, {"guest": "A", "start": 95, "end": 200, "video": False}, None)
+    assert out["cold_open"] == []
 
 
 # ---------- refresh & update ----------
@@ -799,3 +816,53 @@ def test_update_check_without_internet_says_so(app_client, monkeypatch):
     monkeypatch.setattr(updater, "_get", offline)
     r = client.get("/api/update")
     assert r.status_code == 503 and "Couldn't reach GitHub" in r.json()["detail"]
+
+
+# ---------- learned from Elijah's own picks (Oct 11-31 lives) ----------
+def test_preview_must_end_on_the_question_it_claims():
+    from plan_check import validate
+    talk = _talk([(100, "So who are these two persons who sent who"), (104, "Okay let me explain this to you brother"),
+                  (120, "Yahweh is sent by Yahweh of hosts"), (130, "So who sent who")])
+    plan = {"conversations": [{"guest": "A", "start": 95, "end": 700, "rank": "STRONG", "video": True,
+                               "cold_open": [{"start": 100, "end": 133}], "cold_open_ends_on": "So who sent who"},
+                              {"guest": "B", "start": 800, "end": 1500, "rank": "STRONG", "video": True,
+                               "cold_open": [{"start": 100, "end": 133}], "cold_open_ends_on": "nowhere in this call"}]}
+    clean, _ = validate(plan, 2000, dict(talk, duration=2000))
+    a, b = clean["conversations"]
+    assert a["cold_open_ends_at"] == 130 and a["cold_open_ends_on"] == "So who sent who"
+    assert b["cold_open_ends_at"] is None and b["cold_open_ends_on"] is None   # not found: never claimed
+    early = dict(plan["conversations"][0], cold_open_ends_on="So who are these two persons", cold_open=[{"start": 100, "end": 133}])
+    clean, _ = validate({"conversations": [early]}, 2000, dict(talk, duration=2000))
+    assert clean["conversations"][0]["cold_open_ends_at"] is None              # said at the start, not where it ends
+    cut_off = dict(plan["conversations"][0], cold_open=[{"start": 100, "end": 130.5}])   # stops one word into it
+    clean, _ = validate({"conversations": [cut_off]}, 2000, dict(talk, duration=2000))
+    c = clean["conversations"][0]
+    assert c["cold_open"] == [[100, 131.8]] and c["cold_open_ends_at"] == 130    # stretched to finish the question
+    split = dict(plan["conversations"][0], cold_open=[{"start": 100, "end": 110}, {"start": 110.4, "end": 133}])
+    clean, _ = validate({"conversations": [split]}, 2000, dict(talk, duration=2000))
+    assert clean["conversations"][0]["cold_open"] == [[100, 133]]              # touching clips become one stretch
+
+
+def test_video_picks_preselect_and_short_calls_are_shorts_only(app_client, tmp_path):
+    from plan_check import validate
+    clean, _ = validate({"conversations": [
+        {"guest": "Long debate", "start": 0, "end": 1500, "rank": "MEDIUM", "video": True, "cold_open": [[10, 50]]},
+        {"guest": "Catholic Q&A", "start": 1600, "end": 3000, "rank": "STRONG", "video": False, "video_reason": "in-house",
+         "cold_open": [[1610, 1650]]},
+        {"guest": "Five minutes", "start": 3100, "end": 3400, "rank": "STRONG", "video": True, "cold_open": [[3110, 3150]]}]}, 4000)
+    v = {c["guest"]: c for c in clean["conversations"]}
+    assert v["Long debate"]["video"] and not v["Catholic Q&A"]["video"] and not v["Five minutes"]["video"]
+    server, client = app_client
+    pid, _ = _project_with_plan(server, tmp_path)
+    d = server.pdir(pid)
+    plan = json.load(open(os.path.join(d, "work", "plan.json")))
+    plan["conversations"][0]["video"] = False
+    json.dump(plan, open(os.path.join(d, "work", "plan.json"), "w"))
+    items = client.get(f"/api/projects/{pid}").json()["items"]
+    conv = next(i for i in items if i["kind"] == "long")
+    assert conv["selected"] is False                           # not a video pick: not ticked for rendering
+
+
+def test_glitch_transition_can_be_turned_off():
+    import render_long
+    assert "rgbashift" in render_long.glitch({}) and render_long.glitch({"transition": "cut"}) == ""

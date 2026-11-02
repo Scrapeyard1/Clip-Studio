@@ -34,7 +34,7 @@ download to get it.)
    enhancement; add `--no-photo-models` to skip those) and any missing fonts, then
    prints a setup check. Every line should say `ok` except the Claude API key, which you add in the app.
 4. `python app/server.py` opens http://localhost:8765. Add your Claude API key in Settings, plus
-   the sting, the Patreon outro and your thumbnail photo folder.
+   the 10-second title sequence, the Patreon outro and your thumbnail photo folder.
 
 The app repeats the setup check every time it starts, and the home screen shows anything missing
 with the exact fix.
@@ -76,23 +76,38 @@ with the exact fix.
    Exports: **Resolve / Premiere** (`.xml`; Resolve: File > Import > Timeline, Premiere: File > Import),
    the video, and `.srt` captions (CapCut: import the video, then the captions).
 
-## How clips are chosen: setup, clash, turn
+## How clips are chosen
 
-Claude plans in two passes. First it maps the live (every conversation, the caller, the topic, how
-strong it is). Then it reads each conversation on its own and:
+Claude plans in two passes. First it maps the live: every conversation, the caller, the topic, how
+strong it is, and whether it should be its own video. Then it reads each conversation on its own and:
 
 - finds every place the caller's argument **defeats itself** (he contradicts himself, admits the point,
   leans on a source or standard he rejects), quoting both statements word for word with their times;
-- builds the cold open and the shorts in three beats: **Setup** (the question or claim that tells a
-  stranger what's being debated), **Clash** (both sides in their own voices), **Turn** (his argument
-  undercutting itself and Elijah catching it, or the decisive answer).
+- builds the **cold open** the way Elijah builds his previews: one continuous 30-45 s stretch of the
+  real conversation (two clips at most) that tells a stranger what's being debated, has real tension,
+  and ends on an unanswered question or challenge, just before the answer;
+- builds the **shorts** in three beats: **Setup** (the question or claim that tells a stranger what's
+  being debated), **Clash** (both sides in their own voices), **Turn** (his argument undercutting itself
+  and Elijah catching it, or the decisive answer).
+
+**Learned from Elijah's own videos.** These rules come from four October lives where Elijah supplied
+what he actually published (`tools/eval/`). His long-forms are debates where the guest argues from
+outside the faith (Muslim, atheist, Hebrew Israelite, oneness), 12-60 minutes; sincere questions,
+in-house Christian discussions and calls under 8 minutes aren't made into videos. Each conversation
+shows "video pick" or "shorts only" (hover for why), and video picks come ticked for rendering. A video
+runs from the first hello to the guest through Elijah's closing words after the guest leaves. Against
+those four lives the planner now picks all 11 of his videos (10 before) and builds every preview in his
+shape; it also suggests about one extra debate per live that he didn't make.
 
 Before you see anything, the app checks every quoted self-defeat against the words actually said near
 that time (correcting the time if it's slightly off) and drops any it can't find, so nothing is
 claimed without evidence. Cuts that land inside a word move to its edge, and a quote just outside a
 clip pulls the clip edge out to it. In review each clip shows its beat and who's speaking, a red box
 shows any self-defeat with both quotes ("Hear it" on each), and a note names any missing beat
-("No setup: viewers won't know what's being debated"). The chat editor can fix those for you.
+("No setup: viewers won't know what's being debated"). For a cold open it shows the question it ends
+on (checked against the transcript; a clip that stops mid-question is stretched to finish it) and notes
+anything off: too many clips, too short or long, or no open question at the end. The chat editor can
+fix those for you.
 
 ## The chat editor
 
@@ -112,7 +127,7 @@ it and a filmstrip across the whole live, with an overall percentage and time le
 Finished renders play in full color.
 
 **Preview** (on every conversation and short, or click its "Upcoming" picture) plays the whole video as
-it will be cut, before you render: cold-open clips, the sting, the conversation with every trimmed pause
+it will be cut, before you render: the cold open, the title sequence, the conversation with every trimmed pause
 already removed, then the outro; for shorts, every piece in order with pauses tightened. It's built
 from the same code as the render, so the length matches to the frame. The bar under it shows each part
 and a red tick at every trimmed pause; click anywhere to jump. Parts are made on the fly at 360p a few
@@ -144,7 +159,11 @@ projects/<live>/
   A crash mid-render leaves nothing that looks finished; Retry redoes it.
 - **One timeline for everything.** The video, captions, chapters and the Resolve/Premiere timeline
   are all built from the same frame-exact plan (`drafts/<id>.timeline.json`), using the recording's
-  real frame rate (29.97 stays 30000/1001) and the real length of your sting and outro.
+  real frame rate (29.97 stays 30000/1001) and the real length of your title sequence and outro.
+- **Transitions.** Each preview clip, the title sequence, the conversation and the outro start with a
+  quick flash and VHS glitch (about a quarter second, timing untouched). Pause trims inside the
+  conversation stay invisible cuts. `"transition": "cut"` in `projects/settings.json` turns it off.
+  The Resolve/Premiere timeline has plain cuts so the editor can add his own.
 - **Restart-proof.** If the app closes mid-job, it picks the job back up on the next start.
 
 ## Command line
@@ -167,7 +186,8 @@ python -m pytest -q tests          # regression tests, ~10 seconds, no models ne
 | `engine/cuts.py` | Safe cuts: only where nobody is talking and the audio is quiet |
 | `engine/moments.py` + `plan_check.py` | Claude's plan, then validation (one automatic repair attempt) |
 | `engine/glossary.py` | Names and terms corrections that keep word timing |
-| `engine/render_long.py` | Cold open → sting → conversation with safe cuts → Patreon outro |
+| `engine/render_long.py` | Cold open → 10 s title sequence → conversation with safe cuts → Patreon outro, glitch transitions |
+| `tools/eval/` | Elijah's published picks from four lives and a scorer for checking planner changes |
 | `engine/render_short.py` | 1080x1920 short: framing modes, word-by-word captions, hook text. Rendered piece by piece, so memory stays flat for any length |
 | `engine/guests.py` + `caller.py` | Guest library (photo, @handle) with photo enhancement, and the audio-driven caller badge |
 | `engine/export_timeline.py` | FCP7 XML for Resolve and Premiere: cuts against the original file, a marker at every trimmed pause |
@@ -183,4 +203,4 @@ python -m pytest -q tests          # regression tests, ~10 seconds, no models ne
   audio track: set its number in Settings ("Caller's audio track") and it moves only when they talk.
   YouTube downloads have one mixed track.
 - Speaker labels per OBS audio track aren't used yet; on one mixed track captions don't say who's talking.
-- The sting and outro are marked as gaps in the editor timeline until their files are set in Settings.
+- The title sequence and outro are placeholder cards (10 s and 4 s) until their files are set in Settings.

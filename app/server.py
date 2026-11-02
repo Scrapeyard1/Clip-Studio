@@ -154,7 +154,8 @@ def view(pid):
         key = f"render-{it['id']}"
         state = pipeline.step_state(d, key, list(outs.values()) if it["kind"] == "long" else [outs["video"]],
                                     pipeline.render_inputs(d, it, cfg))
-        v = {**it, "selected": mine.get("selected", it["kind"] == "long" and it.get("rank") != "WEAK"),
+        default = it.get("video", it.get("rank") != "WEAK") if it["kind"] == "long" else False
+        v = {**it, "selected": mine.get("selected", default),
              "approved": mine.get("approved", False), "render": state,
              "problems": pipeline.render_problems(it)}
         import plan_check
