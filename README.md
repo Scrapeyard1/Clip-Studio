@@ -98,6 +98,12 @@ unless two of them are combined into one video (his rule): the planner pairs the
 happened, and an odd one out stays shorts only. Each conversation shows "video pick", "shorts only" or
 "in a combined video" (hover for why), and videos come ticked for rendering.
 
+**Tight previews.** Every preview loses its filler words (um, uh, er, ah, hmm, mm) and any dead air
+longer than 0.23 s is cut down to 0.23 s, using word timings plus a loudness check, so a gap with sound
+in it (words the transcriber missed, laughter, a sound effect) is kept. "like" and "you know" are left
+alone because they can carry meaning. The full preview player shows the tightened version; the clip
+times in review are the raw stretch.
+
 **Combined videos.** One cold open (from the stronger of the two calls), the title sequence, then both
 conversations back to back with a glitch transition between them, then the outro. The combined card
 lists both calls; change their times on each call's own card and the combined video follows. "Split

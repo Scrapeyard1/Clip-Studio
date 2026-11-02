@@ -312,6 +312,12 @@ def analyze(d, source, rep=None, threads=None):
     run_step(d, "plan", "Find conversations and shorts", [pj], plan, rep, inputs=[os.path.getsize(tr)])
 
 
+def analysis_audio(d):
+    """The 16 kHz audio made during analysis (used to tell dead air from sound in previews)."""
+    p = os.path.join(d, "work", "audio16k.wav")
+    return p if os.path.exists(p) else None
+
+
 # ---------------- full preview (before rendering) ----------------
 PREVIEW_CHUNK = 90          # long stretches are split so playback starts fast and the next part is ready
 PREVIEW_SPAN = 150          # parts are joined into one file only when they sit this close in the live
@@ -328,13 +334,13 @@ def cut_plan(d, item, cfg, source=None):
     fps = media.probe(source)["fps"] if source else 30
     if item["kind"] == "long":
         import render_long
-        tl, _, _, _ = render_long.plan_timeline(fps, tr, item, cfg, quiet)
+        tl, _, _, _ = render_long.plan_timeline(fps, tr, item, cfg, quiet, analysis_audio(d))
     else:
         import render_short
         tl = Timeline(fps)
         for a, b in render_short.keep_ranges(tr, item, quiet):
             tl.add_source("body", a, b)
-    chunks, cold_n = [], 0
+    chunks, cold_n, cold_label = [], 0, None
     for seg in tl.segments:
         at = tl.sec(seg["at_f"])
         if seg["src"] != "main":
@@ -343,8 +349,8 @@ def cut_plan(d, item, cfg, source=None):
                            "at": round(at, 3), "label": name, "placeholder": seg["src"].startswith("card:")})
             continue
         a, b = tl.src_seconds(seg)
-        if seg["kind"] == "cold":
-            cold_n += 1
+        if seg["kind"] == "cold" and seg["label"] != cold_label:   # a preview clip, in tightened pieces
+            cold_n, cold_label = cold_n + 1, seg["label"]
         label = f"Cold open, clip {cold_n}" if seg["kind"] == "cold" else (
             "The conversation" if item["kind"] == "long" else "The short")
         x = a
@@ -354,7 +360,8 @@ def cut_plan(d, item, cfg, source=None):
                 y = b
             last = chunks[-1] if chunks else None
             # nearby parts (pauses tightened between them) play as one smooth file; far-apart ones don't
-            if (last and last.get("parts") and last["kind"] == seg["kind"] and seg["kind"] != "cold"
+            if (last and last.get("parts") and last["kind"] == seg["kind"]
+                    and (seg["kind"] != "cold" or last["label"] == label)
                     and x >= last["parts"][-1][1] and y - last["parts"][0][0] <= PREVIEW_SPAN
                     and last["seconds"] + (y - x) <= PREVIEW_JOINED):
                 last["parts"].append([round(x, 3), round(y, 3)])
@@ -395,7 +402,7 @@ def render_inputs(d, item, cfg):
     """Everything a render depends on; if any of it changes, the render is stale."""
     keys = LONG_EDIT_KEYS if item["kind"] == "long" else SHORT_EDIT_KEYS
     out = {"item": {k: item.get(k) for k in keys + (("parts",) if item.get("parts") else ())}, "glossary": glossary_text(d),
-           "sting": cfg.get("sting"), "outro": cfg.get("outro"), "v": 2}
+           "sting": cfg.get("sting"), "outro": cfg.get("outro"), "v": 3}      # v3: tight previews
     if item["kind"] == "short" and item.get("framing") == "guest":      # new photo or handle -> re-render
         g = guest_for_render(d, item, cfg)
         out["guest"] = {k: g.get(k) for k in ("name", "handle", "version", "track")}
@@ -457,7 +464,8 @@ def render(d, source, ids, cfg=None, rep=None):
             import render_long
             run_step(d, f"render-{iid}", f"Render: {label}", list(outs.values()),
                      lambda item=item: render_long.render(source, tr, dict(item, name=iid),
-                                                          os.path.join(d, "drafts"), cfg, quiet), rep, inputs)
+                                                          os.path.join(d, "drafts"), cfg, quiet,
+                                                          audio=analysis_audio(d)), rep, inputs)
             if os.environ.get("ANTHROPIC_API_KEY"):
                 mj = os.path.join(d, "drafts", iid + ".metadata.json")
 

@@ -23,7 +23,7 @@ import tempfile
 import export_timeline
 import media
 import paths
-from cuts import CutReport, safe_cuts
+from cuts import CutReport, safe_cuts, tighten_preview
 from timeline import Timeline, write_srt
 
 CARD_SECONDS = {"sting": 10.0, "outro": 4.0}      # sting = the 10 s title sequence
@@ -128,7 +128,7 @@ def source_piece(path, video, segs, W, H, fps, cfg, workdir, each_clip=False):
     fc.append(f"{''.join(parts)}concat=n={len(segs)}:v=1:a=1[v][a]")
     script = os.path.join(workdir, f"filter_{os.path.basename(path)}.txt")
     open(script, "w", encoding="utf-8").write(";\n".join(fc))
-    media.run([paths.ffmpeg(), "-y", *inputs, "-filter_complex_script", script, "-map", "[v]", "-map", "[a]",
+    media.run([paths.ffmpeg(), "-y", *inputs, *media.filter_script(script), "-map", "[v]", "-map", "[a]",
                "-ac", "2", *enc_args(cfg), "-c:a", "pcm_s16le", path])
 
 
@@ -144,7 +144,7 @@ def outputs(out_dir, name):
             (("video", ".mp4"), ("srt", ".srt"), ("xml", ".xml"), ("timeline", ".timeline.json"), ("cuts", ".cuts.json"))}
 
 
-def plan_timeline(fps, transcript, item, cfg=None, quiet=None):
+def plan_timeline(fps, transcript, item, cfg=None, quiet=None, audio=None):
     """The finished video's exact sequence (cold open, sting, conversation with pauses trimmed, outro),
     without rendering anything. Used by render() and by the full preview, so both always agree."""
     cfg = cfg or {}
@@ -154,14 +154,16 @@ def plan_timeline(fps, transcript, item, cfg=None, quiet=None):
                     sum(r.source_len for r in reps), sum(r.output_len for r in reps))
     sting = cfg.get("sting") if cfg.get("sting") and os.path.isfile(cfg["sting"]) else None
     outro = cfg.get("outro") if cfg.get("outro") and os.path.isfile(cfg["outro"]) else None
-    tl = Timeline.for_longform(fps, item["cold_open"], rep.keep,
+    cold = [(a, b, n) for n, (s, e) in enumerate(item["cold_open"])        # previews: no fillers, no
+            for a, b in tighten_preview(transcript, s, e, audio=audio).keep]  # dead air over 0.23 s
+    tl = Timeline.for_longform(fps, cold, rep.keep,
                                media.probe(sting)["duration"] if sting else CARD_SECONDS["sting"],
                                media.probe(outro)["duration"] if outro else CARD_SECONDS["outro"],
                                "sting" if sting else "card:sting", "outro" if outro else "card:outro")
     return tl, rep, sting, outro
 
 
-def render(video, transcript, item, out_dir, cfg=None, quiet=None, timeline_only=False):
+def render(video, transcript, item, out_dir, cfg=None, quiet=None, timeline_only=False, audio=None):
     """item: {name, start, end, cold_open[[a,b]], protect[[a,b]]}. Returns the outputs dict."""
     cfg = cfg or {}
     src = media.probe(video)
@@ -170,7 +172,7 @@ def render(video, transcript, item, out_dir, cfg=None, quiet=None, timeline_only
     out = outputs(out_dir, name)
     os.makedirs(out_dir, exist_ok=True)
 
-    tl, rep, sting, outro = plan_timeline(fps, transcript, item, cfg, quiet)
+    tl, rep, sting, outro = plan_timeline(fps, transcript, item, cfg, quiet, audio)
 
     work = tempfile.mkdtemp(prefix="render-", dir=out_dir)
     try:
@@ -180,7 +182,8 @@ def render(video, transcript, item, out_dir, cfg=None, quiet=None, timeline_only
             for seg in tl.segments:          # group consecutive segments of the same kind (a new group
                 prev = groups[-1][1][-1] if groups else None    # where a combined video jumps to its 2nd call)
                 if groups and groups[-1][0] == seg["kind"] and not (
-                        seg["kind"] == "body" and seg["in_f"] - prev["out_f"] > gap):
+                        seg["kind"] == "body" and seg["in_f"] - prev["out_f"] > gap) and not (
+                        seg["kind"] == "cold" and seg["label"] != prev["label"]):   # each preview clip on its own
                     groups[-1][1].append(seg)
                 else:
                     groups.append((seg["kind"], [seg]))
@@ -188,7 +191,7 @@ def render(video, transcript, item, out_dir, cfg=None, quiet=None, timeline_only
                 p = os.path.join(work, f"{i:02d}-{kind}.mkv")
                 frames = sum(s["out_f"] - s["in_f"] for s in segs)
                 if segs[0]["src"] == "main":
-                    source_piece(p, video, segs, W, H, fps, cfg, work, each_clip=(kind == "cold"))
+                    source_piece(p, video, segs, W, H, fps, cfg, work)   # glitch at the start of each piece
                 elif segs[0]["src"] == "sting":
                     file_piece(p, sting, frames, W, H, fps, cfg)
                 elif segs[0]["src"] == "outro":

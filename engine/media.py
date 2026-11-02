@@ -69,6 +69,30 @@ def run(cmd, timeout=None, on_line=None):
         progress.done = base + last[0]
 
 
+_script_opt = {}
+
+
+def filter_script(path):
+    """FFmpeg arguments that read a filter graph from a file. FFmpeg 8 removed -filter_complex_script
+    (Windows and Homebrew install 8); 7+ reads files with "-/filter_complex", 6 and older can't. Asks
+    this FFmpeg once which it understands."""
+    exe = paths.ffmpeg()
+    if exe not in _script_opt:
+        import tempfile
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+            f.write("[0:v]null[v]")
+        try:
+            out = subprocess.run([exe, "-v", "error", "-f", "lavfi", "-i", "nullsrc=s=16x16:d=0.04",
+                                  "-/filter_complex", f.name, "-map", "[v]", "-f", "null", "-"],
+                                 capture_output=True, timeout=30)
+            _script_opt[exe] = "-/filter_complex" if out.returncode == 0 else "-filter_complex_script"
+        except (OSError, subprocess.SubprocessError):
+            _script_opt[exe] = "-filter_complex_script"
+        finally:
+            os.unlink(f.name)
+    return [_script_opt[exe], path]
+
+
 def describe_failure(prog, code, stderr):
     """FFmpeg's real complaint, not its banner: keep the lines that say what went wrong."""
     name = os.path.basename(prog)

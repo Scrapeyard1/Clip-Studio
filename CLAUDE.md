@@ -29,7 +29,7 @@ python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 python scripts/get_models.py        # ~1.2 GB into ./models (gitignored)
 python app/server.py                # http://localhost:8765
-python -m pytest -q tests           # 55 tests, ~1 min
+python -m pytest -q tests           # 59 tests, ~1 min
 ```
 The Claude API key goes in the app's Settings (stored in projects/settings.json, gitignored).
 Never commit it, print it, or paste it into files. Elijah has a working key with credit.
@@ -88,6 +88,14 @@ Done and tested on Linux (not yet on a Mac or Windows; first Mac run is the next
   "combos" overrides the plan's pairs once he combines/splits (POST /combine, /split). render_long
   plan_timeline cuts each part; body groups split at >30 s gaps so each part decodes on its own and
   gets a glitch. The map's "video" now means quality only; length rules live in plan_check.
+- FFmpeg 8 (Nov 1): 8.0 removed -filter_complex_script ("Option not found" on Windows/Homebrew
+  renders). media.filter_script() asks FFmpeg once whether "-/filter_complex <file>" works (7+) and
+  falls back for 6.x. Test suite passes on 6.1 and on an FFmpeg 8/master build (CLIPSTUDIO_FFMPEG).
+- Tight previews (Nov 1, his rule): cuts.tighten_preview removes filler words and shrinks dead air
+  over 0.23 s to 0.23 s inside cold-open clips, from word timings plus a loudness check on
+  work/audio16k.wav (gap 90th-pct frame dB must be 12 dB under the clip's 80th-pct speech level).
+  Cold clips become several timeline pieces labelled "Cold open N"; each clip renders as its own
+  group (one glitch per clip). render_inputs v3 marks older renders as changed.
 - First real run on the Oct 1 live ("What is ILLOGICAL about the Trinity?", 2:41:51) found 11
   conversations and 8 shorts; titles/description/chapters generated for "Black on YT".
 
