@@ -133,6 +133,14 @@ def carry_edits(d, old_plan, new_plan):
         if best:
             e["items"][best] = dict(e["items"].pop(oid), moved_from=oid)
             moved[oid] = best
+    if moved:                                   # combined videos follow their conversations to the new ids
+        old_pairs = e["combos"] if "combos" in e else [c["ids"] for c in (old_plan or {}).get("combos", [])]
+        for p in old_pairs:
+            new = [moved.get(i, i) for i in p]
+            if new != list(p) and combo_id(*p) in e["items"]:
+                e["items"][combo_id(*new)] = e["items"].pop(combo_id(*p))
+        if "combos" in e:
+            e["combos"] = [[moved.get(i, i) for i in p] for p in e["combos"]]
     if moved:
         media.write_json(os.path.join(d, "edits.json"), e)
     return moved
@@ -144,14 +152,58 @@ def glossary_text(d):
     return glossary.DEFAULTS if g is None else g
 
 
+COMBO_EDIT_KEYS = ("guest", "topic", "cold_open", "protect")
+
+
+def combo_id(a, b):
+    """Stable id of the video combining conversations a and b (same whichever order they're given)."""
+    x, y = sorted((a, b))
+    return f"m-{x}-{y}"
+
+
+def combo_pairs(d, plan=None):
+    """Which conversations are combined into one video: the person's choice once they've made one,
+    otherwise the plan's suggestion. [[id_a, id_b], ...]"""
+    e = edits(d)
+    if "combos" in e:
+        return [list(p) for p in e["combos"]]
+    plan = plan if plan is not None else load(os.path.join(d, "work"), "plan.json", {})
+    return [list(c["ids"]) for c in (plan or {}).get("combos", [])]
+
+
 def effective_items(d):
-    """AI plan with the person's edits laid over it, item by item (matched by stable id)."""
+    """AI plan with the person's edits laid over it, item by item (matched by stable id).
+    Two short conversations combined into one video appear as one more long item with "parts"
+    (its times always follow the two conversations' own, edited times)."""
     plan = load(os.path.join(d, "work"), "plan.json", {"conversations": [], "shorts": []})
     e = edits(d)["items"]
     convs, shorts = [], []
     for c in plan.get("conversations", []):
         convs.append({**c, **{k: v for k, v in e.get(c["id"], {}).items() if k in LONG_EDIT_KEYS + LONG_LABEL_KEYS},
                       "kind": "long"})
+    by_id = {c["id"]: c for c in convs}
+    suggested = {frozenset(c["ids"]): c for c in plan.get("combos", [])}
+    import plan_check
+    for ids in combo_pairs(d, plan):
+        if len(ids) != 2 or ids[0] == ids[1] or any(i not in by_id for i in ids):
+            continue
+        a, b = sorted((by_id[i] for i in ids), key=lambda c: c["start"])
+        cid = combo_id(a["id"], b["id"])
+        base = suggested.get(frozenset(ids)) or {k: plan_check.stronger(a, b).get(k) for k in plan_check.COMBO_COPY}
+        item = {"id": cid, "kind": "long", "combo": True, "members": [a["id"], b["id"]],
+                "parts": [[a["start"], a["end"]], [b["start"], b["end"]]], "start": a["start"], "end": b["end"],
+                "guest": f"{a['guest']} + {b['guest']}", "topic": f"{a.get('topic', '')} / {b.get('topic', '')}",
+                "rank": plan_check.stronger(a, b).get("rank"), "video": True,
+                "video_reason": base.get("reason") or f"You combined {a['guest']} and {b['guest']} into one video.",
+                "protect": list(a.get("protect") or []) + list(b.get("protect") or []),
+                "self_defeats": list(a.get("self_defeats") or []) + list(b.get("self_defeats") or []),
+                "summary": " ".join(x for x in (a.get("summary"), b.get("summary")) if x), "issues": [],
+                **{k: base.get(k) for k in plan_check.COMBO_COPY}}
+        item.update({k: v for k, v in e.get(cid, {}).items() if k in COMBO_EDIT_KEYS + LONG_LABEL_KEYS})
+        for m in (a, b):
+            m["in_combo"] = cid
+        convs.append(item)
+    convs.sort(key=lambda c: (c["start"], 0 if c.get("combo") else 1))
     for s in plan.get("shorts", []):
         shorts.append({**s, **{k: v for k, v in e.get(s["id"], {}).items() if k in SHORT_EDIT_KEYS + SHORT_LABEL_KEYS},
                        "kind": "short"})
@@ -342,7 +394,7 @@ def guest_for_render(d, item, cfg):
 def render_inputs(d, item, cfg):
     """Everything a render depends on; if any of it changes, the render is stale."""
     keys = LONG_EDIT_KEYS if item["kind"] == "long" else SHORT_EDIT_KEYS
-    out = {"item": {k: item.get(k) for k in keys}, "glossary": glossary_text(d),
+    out = {"item": {k: item.get(k) for k in keys + (("parts",) if item.get("parts") else ())}, "glossary": glossary_text(d),
            "sting": cfg.get("sting"), "outro": cfg.get("outro"), "v": 2}
     if item["kind"] == "short" and item.get("framing") == "guest":      # new photo or handle -> re-render
         g = guest_for_render(d, item, cfg)
@@ -358,8 +410,10 @@ def render_problems(item):
             out.append("Pick at least one cold-open clip.")
         if not (item.get("end", 0) - item.get("start", 0) >= 60):
             out.append("The conversation needs to be at least a minute long.")
-        if any(not (item["start"] - 1 <= a < b <= item["end"] + 1) for a, b in item.get("cold_open", [])):
-            out.append("Every cold-open clip must come from inside the conversation.")
+        parts = item.get("parts") or [[item.get("start", 0), item.get("end", 0)]]
+        if any(not any(pa - 1 <= a < b <= pb + 1 for pa, pb in parts) for a, b in item.get("cold_open", [])):
+            out.append("Every cold-open clip must come from inside the conversation"
+                       + (" (one of the two combined)." if item.get("parts") else "."))
     else:
         if not item.get("pieces"):
             out.append("Add at least one clip.")
@@ -385,7 +439,8 @@ def render(d, source, ids, cfg=None, rep=None):
         raise RuntimeError("Fix these before rendering. " + " | ".join(blocked))
     def expected_seconds(it):
         if it["kind"] == "long":
-            return it["end"] - it["start"] + sum(b - a for a, b in it.get("cold_open", [])) + 7
+            parts = it.get("parts") or [[it["start"], it["end"]]]
+            return sum(b - a for a, b in parts) + sum(b - a for a, b in it.get("cold_open", [])) + 14
         return sum(b - a for a, b in it["pieces"])
     for n, iid in enumerate(ids, 1):
         item = by_id[iid]

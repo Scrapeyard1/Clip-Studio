@@ -450,6 +450,9 @@ def apply_edit(pid, iid, changes):
     item = next((i for i in convs + shorts if i["id"] == iid), None)
     if not item:
         raise HTTPException(404, "No conversation or short with that id")
+    if item.get("combo") and ({"start", "end"} & set(changes)):
+        raise HTTPException(400, "This video combines two conversations: change the times on each "
+                                 "conversation's own card.")
     bad = set(changes) - EDITABLE[item["kind"]]
     if bad:
         raise HTTPException(400, f"Can't change: {', '.join(sorted(bad))}")
@@ -486,6 +489,39 @@ def apply_edit(pid, iid, changes):
         e["items"].setdefault(iid, {}).update(changes)
         save_edits(pid, e)
     return next(i for i in view(pid)["items"] if i["id"] == iid)
+
+
+@app.post("/api/projects/{pid}/combine")
+def combine(pid: str, body: dict = Body(...)):
+    """Make two conversations one video (they play back to back after one cold open)."""
+    ids = [str(i) for i in body.get("ids", [])]
+    d = pdir(pid)
+    convs, _ = pipeline.effective_items(d)
+    single = {c["id"]: c for c in convs if not c.get("combo")}
+    if len(ids) != 2 or ids[0] == ids[1] or any(i not in single for i in ids):
+        raise HTTPException(400, "Pick two different conversations to combine.")
+    with _lock:
+        pairs = [p for p in pipeline.combo_pairs(d) if not set(p) & set(ids)]   # each conversation in one video
+        e = load_edits(pid)
+        e["combos"] = pairs + [ids]
+        save_edits(pid, e)
+    return view(pid)
+
+
+@app.post("/api/projects/{pid}/split")
+def split(pid: str, body: dict = Body(...)):
+    """Undo a combined video: the two conversations go back to being separate."""
+    d = pdir(pid)
+    target = str(body.get("id", ""))
+    with _lock:
+        pairs = pipeline.combo_pairs(d)
+        keep = [p for p in pairs if len(p) != 2 or pipeline.combo_id(*p) != target]
+        if len(keep) == len(pairs):
+            raise HTTPException(404, "No combined video with that id")
+        e = load_edits(pid)
+        e["combos"] = keep
+        save_edits(pid, e)
+    return view(pid)
 
 
 @app.put("/api/projects/{pid}/glossary")

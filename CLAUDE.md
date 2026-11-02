@@ -29,7 +29,7 @@ python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 python scripts/get_models.py        # ~1.2 GB into ./models (gitignored)
 python app/server.py                # http://localhost:8765
-python -m pytest -q tests           # 52 tests, ~1 min
+python -m pytest -q tests           # 55 tests, ~1 min
 ```
 The Claude API key goes in the app's Settings (stored in projects/settings.json, gitignored).
 Never commit it, print it, or paste it into files. Elijah has a working key with credit.
@@ -82,13 +82,20 @@ Done and tested on Linux (not yet on a Mac or Windows; first Mac run is the next
   shape (3-9 stitched fragments). Tuned: picked 11/11 (11 of 14 own picks were his), previews in his
   shape (1 clip ~40 s ending on a question) for most; exact-moment overlap is noisy run to run.
   Prompt examples come from 10-11/10-13 only; 10-15/10-31 are the held-out check.
+- Combined videos (Nov 1, his rule): plan_check.pair_short_debates pairs good debates of 8-15 min
+  (COMBINE_MAX) in time order into plan["combos"]; members get video=False. clipstudio.effective_items
+  builds the combo item (id m-<a>-<b>, "parts" from the members' EDITED times, combo=True); edits.json
+  "combos" overrides the plan's pairs once he combines/splits (POST /combine, /split). render_long
+  plan_timeline cuts each part; body groups split at >30 s gaps so each part decodes on its own and
+  gets a glitch. The map's "video" now means quality only; length rules live in plan_check.
 - First real run on the Oct 1 live ("What is ILLOGICAL about the Trinity?", 2:41:51) found 11
   conversations and 8 shorts; titles/description/chapters generated for "Black on YT".
 
 ## Open questions for Elijah (ask before deciding)
 
-1. (Mostly answered by his picks) He publishes 12-60 min debates; under 8 min is now "shorts only".
-   Still unconfirmed: whether he'd also want 8-12 min debates as videos.
+1. Answered (Nov 1): debates of 15 min or less are shorts, unless two are stitched into one video.
+   Implemented as combos (see Status). Unconfirmed: a combined video gets ONE preview (from the
+   stronger call); ask if he'd rather have a preview per call.
 2. Real Patreon link for descriptions (currently a placeholder in metadata STYLE).
 3. Title sequence (10 s) and Patreon outro video files, thumbnail photo folder: still not supplied.
 4. Whether OBS records callers on their own audio track (Settings "Caller's audio track").

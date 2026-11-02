@@ -92,9 +92,16 @@ strong it is, and whether it should be its own video. Then it reads each convers
 
 **Learned from Elijah's own videos.** These rules come from four October lives where Elijah supplied
 what he actually published (`tools/eval/`). His long-forms are debates where the guest argues from
-outside the faith (Muslim, atheist, Hebrew Israelite, oneness), 12-60 minutes; sincere questions,
-in-house Christian discussions and calls under 8 minutes aren't made into videos. Each conversation
-shows "video pick" or "shorts only" (hover for why), and video picks come ticked for rendering. A video
+outside the faith (Muslim, atheist, Hebrew Israelite, oneness); sincere questions and in-house
+Christian discussions aren't made into videos. A good debate of 15 minutes or less is shorts only,
+unless two of them are combined into one video (his rule): the planner pairs them in the order they
+happened, and an odd one out stays shorts only. Each conversation shows "video pick", "shorts only" or
+"in a combined video" (hover for why), and videos come ticked for rendering.
+
+**Combined videos.** One cold open (from the stronger of the two calls), the title sequence, then both
+conversations back to back with a glitch transition between them, then the outro. The combined card
+lists both calls; change their times on each call's own card and the combined video follows. "Split
+apart" undoes it; "Make one video with" on any conversation of 15 minutes or less pairs it by hand. A video
 runs from the first hello to the guest through Elijah's closing words after the guest leaves. Against
 those four lives the planner now picks all 11 of his videos (10 before) and builds every preview in his
 shape; it also suggests about one extra debate per live that he didn't make.
