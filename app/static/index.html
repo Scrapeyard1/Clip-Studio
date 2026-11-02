@@ -119,6 +119,11 @@ h2 { font: 400 30px/1 "Anton", sans-serif; margin: 0 0 6px; letter-spacing: .3px
 .name input.topic { color: var(--mist); background: none; border: 0; border-bottom: 1px solid transparent; width: 100%; padding: 2px 0; }
 .chip { font-weight: 700; font-size: 12px; padding: 3px 9px; border-radius: 99px; white-space: nowrap; }
 .chip.rank { background: var(--gold); color: #1B1300; }
+.chip.pick { background: var(--ok); color: #06210E; }
+.chip.skip { background: var(--deck-2); color: var(--mist); border: 1px solid var(--rule); }
+.cliff { margin: 8px 0 0; font-size: 14px; color: var(--paper); }
+.cliff q { color: var(--gold); }
+.cliff.why { color: var(--mist); }
 .chip.state { border: 1px solid var(--rule); color: var(--mist); }
 .chip.state.done { border-color: var(--ok); color: var(--ok); }
 .chip.state.stale { border-color: var(--gold); color: var(--gold); }
@@ -342,7 +347,7 @@ dialog::backdrop { background: rgba(5, 9, 16, .7); }
     <video id="pv-a" playsinline preload="auto"></video><video id="pv-b" playsinline preload="auto" hidden></video>
     <div class="slate" id="pv-slate" hidden></div><div class="pvwait" id="pv-wait" hidden>Getting this part ready…</div></div>
   <div class="pvbar" id="pv-bar" role="slider" aria-label="Position in the preview" tabindex="0"><div id="pv-segs"></div><i class="pvhead" id="pv-head"></i></div>
-  <div class="pvkey"><span><i style="background:#5C4A12"></i>Cold open</span><span><i style="background:repeating-linear-gradient(45deg,#26344C 0 3px,#1A263B 3px 6px)"></i>Sting / outro</span><span><i style="background:var(--deck-2)"></i>Conversation</span><span><i style="background:rgba(240,68,75,.7);width:2px"></i>A trimmed pause</span></div>
+  <div class="pvkey"><span><i style="background:#5C4A12"></i>Cold open</span><span><i style="background:repeating-linear-gradient(45deg,#26344C 0 3px,#1A263B 3px 6px)"></i>Title sequence / outro</span><span><i style="background:var(--deck-2)"></i>Conversation</span><span><i style="background:rgba(240,68,75,.7);width:2px"></i>A trimmed pause</span></div>
   <div class="pvctl"><button class="btn primary" id="pv-play">Play</button><span class="pvtime" id="pv-time">0:00 / 0:00</span><span class="pvnow" id="pv-now"></span></div>
   <p class="pvnote" id="pv-note"></p>
 </dialog>
@@ -380,7 +385,7 @@ dialog::backdrop { background: rgba(5, 9, 16, .7); }
   <form id="sform" class="settings">
     <label>Claude API key <small>used for finding conversations, titles and descriptions. Stored only on this computer.</small>
       <input name="anthropic_api_key" type="password" autocomplete="off" placeholder="sk-ant-..."></label>
-    <label>Intro sting <small>video file played after the cold open</small>
+    <label>Title sequence <small>your 10-second branded intro, played after the cold open</small>
       <input name="sting" placeholder="D:\Channel\sting.mp4"></label>
     <label>Patreon outro <small>video file played at the end of every full conversation</small>
       <input name="outro" placeholder="D:\Channel\patreon-outro.mp4"></label>
@@ -651,7 +656,7 @@ function longCard(c) {
       <label class="include"><input type="checkbox" data-select ${c.selected ? "checked" : ""}> Render</label>
       <div class="name"><input class="guest" value="${esc(c.guest)}" aria-label="Guest name" data-text="guest">
         <input class="topic" value="${esc(c.topic)}" aria-label="Topic" data-text="topic"></div>
-      <div class="chips">${c.rank ? `<span class="chip rank">${esc(c.rank.toLowerCase())}</span>` : ""}${stateChip(c)}<button class="btn small" data-full>Preview</button><button class="btn small" data-chat>Tell the editor</button></div>
+      <div class="chips">${c.video != null ? `<span class="chip ${c.video ? "pick" : "skip"}" title="${esc(c.video_reason || "")}">${c.video ? "video pick" : "shorts only"}</span>` : ""}${c.rank ? `<span class="chip rank">${esc(c.rank.toLowerCase())}</span>` : ""}${stateChip(c)}<button class="btn small" data-full>Preview</button><button class="btn small" data-chat>Tell the editor</button></div>
     </div>
     ${c.problems.length ? `<ul class="problems-list">${c.problems.map(p => `<li>${esc(p)}</li>`).join("")}</ul>` : ""}
     ${structNotes(c)}
@@ -665,8 +670,10 @@ function longCard(c) {
           <input class="tin" data-part="1" value="${fmt(c.end)}" aria-label="Ends">
           <button class="btn small" data-hear="${c.start}|${c.start + 20}">Hear start</button>
           <button class="btn small" data-hear="${c.end - 20}|${c.end}">Hear end</button></div></div>
-      <div><div class="lab">Cold open <small>${coldLen.toFixed(0)} s, aim for about 30</small></div>
+      <div><div class="lab">Cold open <small>${coldLen.toFixed(0)} s, aim for 30-45, ending on an open question</small></div>
         ${clipRows(c.cold_open || [], "cold_open", c.cold_open_beats)}
+        ${c.cold_open_ends_on ? `<p class="cliff">Ends on: <q>${esc(c.cold_open_ends_on)}</q></p>` : ""}
+        ${c.cold_open_why ? `<p class="cliff why">${esc(c.cold_open_why)}</p>` : ""}
         <button class="btn small" data-add="cold_open">Add a clip</button></div>
     </div>${files.video ? "" : "</div>"}
     ${rendered}</article>`;
@@ -967,7 +974,7 @@ function pvPlayChunk(i, offset) {
   const c = PV.cut.chunks[i];
   if (!c) { PV.playing = false; $("#pv-play").textContent = "Play again"; PV.i = 0; return; }
   PV.i = i; pvLabel(c);
-  if (!c.parts) {                                     // sting / outro: a card for its real length
+  if (!c.parts) {                                     // title sequence / outro: a card for its real length
     pvVids.forEach(v => v.hidden = true);
     $("#pv-slate").hidden = false;
     $("#pv-slate").innerHTML = `<div><b>${esc(c.label)}</b><small>${c.placeholder ? `Your ${esc(c.label.toLowerCase())} plays here (${c.seconds.toFixed(1)} s). Set its file in Settings.` : `${c.seconds.toFixed(1)} s`}</small></div>`;
@@ -1032,7 +1039,7 @@ async function fullPreview(id) {
   $("#pv-sub").textContent = "Working out the cut…";
   $("#pv-segs").innerHTML = ""; $("#pv-slate").hidden = true; $("#pv-now").textContent = "";
   $("#pv-note").textContent = it.kind === "long"
-    ? "This is the finished video's cut from your recording: cold open, sting, the conversation with pauses trimmed, then the outro. Titles and thumbnails come with the render."
+    ? "This is the finished video's cut from your recording: cold open, title sequence, the conversation with pauses trimmed, then the outro. Titles and thumbnails come with the render."
     : "This is the short's cut from your recording, in order, with pauses tightened. The vertical framing, captions and hook text are added when it's rendered.";
   pvDlg.show();
   try { PV.cut = await api(`/api/projects/${encodeURIComponent(P.id)}/items/${encodeURIComponent(id)}/cut`); }

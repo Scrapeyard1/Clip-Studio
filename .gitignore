@@ -9,3 +9,5 @@ __pycache__/
 .DS_Store
 .venv/
 install-log.txt
+tools/eval/transcripts/
+tools/eval/out*/

@@ -29,7 +29,7 @@ python3.12 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 python scripts/get_models.py        # ~1.2 GB into ./models (gitignored)
 python app/server.py                # http://localhost:8765
-python -m pytest -q tests           # 49 tests, ~1 min
+python -m pytest -q tests           # 52 tests, ~1 min
 ```
 The Claude API key goes in the app's Settings (stored in projects/settings.json, gitignored).
 Never commit it, print it, or paste it into files. Elijah has a working key with credit.
@@ -65,15 +65,32 @@ Done and tested on Linux (not yet on a Mac or Windows; first Mac run is the next
   code 3, which both Open launchers loop on (the Windows loop is one block so the .bat can be replaced
   while running); started by hand it re-execs. CLIPSTUDIO_UPDATE_BRANCH tests an update from a branch.
   Tested end to end on Linux through the Mac launcher + a browser.
+- Learned from Elijah's own picks (Nov 1): he supplied 4 lives (10-11, 10-13, 10-15, 10-31) with full
+  transcripts, edited transcripts of what became videos, and his preview scripts. Answer key + scorer in
+  tools/eval/ (transcripts not committed: public repo). His patterns, now in moments.py/plan_check.py:
+  * Preview = ONE continuous 36-44 s stretch (two clips once: caller's opening line + payoff), states the
+    debate, ends on an unanswered question/challenge BEFORE the answer. Anywhere in the call (often 2nd
+    half). Then a 10 s branded title sequence (the "sting" slot, placeholder now 10 s), then the whole
+    conversation. Transitions are quick flash/VHS glitches (render_long.glitch).
+  * Videos = debates with someone arguing from outside the faith, 12-60 min; not in-house Christian Q&A,
+    pastoral, friendly, or calls < 8 min (plan_check.MIN_VIDEO forces "shorts only"). Map returns
+    video/video_reason; video picks are pre-ticked for rendering.
+  * Boundaries: first hello to THIS caller -> through Elijah's closing words after the caller leaves.
+  * cold_open_ends_on is verified (find_quote) to start in the last 15 s; a clip that stops mid-question
+    is stretched to finish it (YouTube transcripts and segment-start-only prompts caused this).
+  Scores (tools/eval/score.py): baseline found 11/11, picked 10/11, previews 6% overlap, 0/11 in his
+  shape (3-9 stitched fragments). Tuned: picked 11/11 (11 of 14 own picks were his), previews in his
+  shape (1 clip ~40 s ending on a question) for most; exact-moment overlap is noisy run to run.
+  Prompt examples come from 10-11/10-13 only; 10-15/10-31 are the held-out check.
 - First real run on the Oct 1 live ("What is ILLOGICAL about the Trinity?", 2:41:51) found 11
   conversations and 8 shorts; titles/description/chapters generated for "Black on YT".
 
 ## Open questions for Elijah (ask before deciding)
 
-1. Many conversations are 2-13 min, but long-forms are meant to be ~30-65 min. Skip short ones as
-   long-form and use them only as shorts sources, or keep them as shorter uploads?
+1. (Mostly answered by his picks) He publishes 12-60 min debates; under 8 min is now "shorts only".
+   Still unconfirmed: whether he'd also want 8-12 min debates as videos.
 2. Real Patreon link for descriptions (currently a placeholder in metadata STYLE).
-3. Sting and Patreon outro video files, thumbnail photo folder: still not supplied.
+3. Title sequence (10 s) and Patreon outro video files, thumbnail photo folder: still not supplied.
 4. Whether OBS records callers on their own audio track (Settings "Caller's audio track").
 5. The editor still needs to confirm the .xml opens correctly in Resolve.
 
