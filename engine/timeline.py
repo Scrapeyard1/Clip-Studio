@@ -41,8 +41,8 @@ class Timeline:
     def for_longform(cls, fps, cold_open, keep, sting_seconds, outro_seconds, sting_src="card:sting",
                      outro_src="card:outro"):
         t = cls(fps)
-        for i, (a, b) in enumerate(cold_open):
-            t.add_source("cold", a, b, f"Cold open {i + 1}")
+        for i, c in enumerate(cold_open):          # [a, b], or [a, b, n]: a tightened piece of clip n
+            t.add_source("cold", c[0], c[1], f"Cold open {(c[2] if len(c) > 2 else i) + 1}")
         if sting_seconds:
             t.add_file("sting", sting_src, sting_seconds, "Title sequence")
         for a, b in keep:

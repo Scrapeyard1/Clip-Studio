@@ -136,7 +136,7 @@ def test_rendered_video_matches_its_timeline(tmp_path):
     out = render_long.render(src, tr, item, str(tmp_path / "drafts"), {"preset": "ultrafast", "sting": sting}, quiet=[])
     t = Timeline.load(out["timeline"])
     assert abs(media.probe(out["video"])["duration"] - t.seconds) < 0.15
-    assert abs(t.body_start() - (5 + 2.5)) < 0.05
+    assert abs(t.body_start() - (2.115 + 1.115 + 2.5)) < 0.05      # preview clips lose their trailing pauses
     import xml.etree.ElementTree as ET
     assert int(ET.parse(out["xml"]).getroot().find("sequence/duration").text) == t.frames
     assert "-->" in open(out["srt"], encoding="utf-8").read()
@@ -530,7 +530,8 @@ def test_full_preview_is_exactly_what_renders(app_client, tmp_path):
     assert abs(long_cut["total"] - tl.seconds) < 1e-3                             # same to the millisecond
     ch = long_cut["chunks"]
     assert [c["kind"] for c in ch[:3]] == ["cold", "cold", "sting"] and ch[-1]["kind"] == "outro"
-    assert ch[0]["parts"] == [[90.0, 94.0]] and ch[1]["parts"] == [[60.0, 64.0]]   # cold open order kept
+    assert ch[0]["parts"][0][0] == 90.0 and ch[1]["parts"][0][0] == 60.0          # cold open order kept
+    assert all(b <= 94.0 for a, b in ch[0]["parts"]) and ch[0]["label"] == "Cold open, clip 1"   # tightened
     assert abs(sum(c["seconds"] for c in ch) - long_cut["total"]) < 0.02          # rounding only
     for a, b in zip(ch, ch[1:]):                                                   # back to back, no gaps
         assert abs(a["at"] + a["seconds"] - b["at"]) < 0.02
@@ -927,4 +928,66 @@ def test_combined_video_renders_both_parts_back_to_back(tmp_path):
     assert t.sec(sum(s["out_f"] - s["in_f"] for s in body)) == pytest.approx(40, abs=0.1)   # only the two calls
     assert t.to_output(50, kinds=("body",)) is None and t.to_output(95, kinds=("body",)) is not None
     assert abs(media.probe(out["video"])["duration"] - t.seconds) < 0.15
-    assert abs(t.seconds - (5 + 10 + 40 + 4)) < 0.1                       # preview + 10 s title + both calls + outro
+    assert abs(t.seconds - (2.23 + 10 + 40 + 4)) < 0.1     # tightened preview + 10 s title + both calls + outro
+
+
+# ---------- FFmpeg 8 and tight previews ----------
+def test_filter_graph_file_option_matches_this_ffmpeg(monkeypatch):
+    """FFmpeg 8 (Windows/Homebrew) removed -filter_complex_script: 'Option not found' on every render."""
+    import subprocess as sp
+
+    class R:
+        def __init__(self, code): self.returncode = code
+    for code, want in ((0, "-/filter_complex"), (1, "-filter_complex_script")):
+        media._script_opt.clear()
+        monkeypatch.setattr(sp, "run", lambda *a, code=code, **k: R(code))
+        assert media.filter_script("g.txt") == [want, "g.txt"]
+    media._script_opt.clear()
+
+
+def test_previews_lose_fillers_and_pauses_over_a_quarter_second():
+    from cuts import tighten_preview
+    w = lambda t, s, e: {"w": t, "s": s, "e": e}
+    tr = {"segments": [{"start": 10, "end": 20, "text": "", "words": [
+        w("So", 10.0, 10.3), w("who", 10.35, 10.6), w("um,", 10.7, 11.2), w("sent", 11.3, 11.6),
+        w("who?", 12.6, 12.9), w("Uh", 12.9, 13.1), w("Yeah.", 13.1, 13.4)]}]}
+    rep = tighten_preview(tr, 9.0, 14.5)
+    assert rep.keep == [(9.885, 10.7), (11.2, 11.715), (12.485, 12.9), (13.1, 13.515)]
+    assert [r[2] for r in rep.removed] == ["pause before the first word", "filler word", "pause", "filler word",
+                                           "pause after the last word"]
+    kept = [x for x in tr["segments"][0]["words"] if any(a <= x["s"] < b for a, b in rep.keep)]
+    assert [x["w"] for x in kept] == ["So", "who", "sent", "who?", "Yeah."]       # every real word, no filler
+
+
+def test_rendered_preview_is_tightened(tmp_path):
+    import render_long
+    src = make_video(str(tmp_path / "live.mp4"), 40)
+    words = [{"w": t, "s": s, "e": s + 0.3} for t, s in (("one", 20), ("um", 20.5), ("two", 21.2), ("three", 23))]
+    tr = {"duration": 40, "segments": [{"start": 20, "end": 23.3, "text": "one um two three", "words": words}]}
+    item = {"name": "c0", "start": 0, "end": 40, "cold_open": [[19, 24]]}
+    tl, _, _, _ = render_long.plan_timeline(30, tr, item, {}, [])
+    cold = [s for s in tl.segments if s["kind"] == "cold"]
+    assert len(cold) == 3 and all(s["label"] == "Cold open 1" for s in cold)
+    assert tl.sec(sum(s["out_f"] - s["in_f"] for s in cold)) == pytest.approx(0.415 + 0.53 + 0.53, abs=0.07)
+    out = render_long.render(src, tr, item, str(tmp_path / "drafts"), {"preset": "ultrafast"}, quiet=[])
+    t = Timeline.load(out["timeline"])
+    assert abs(media.probe(out["video"])["duration"] - t.seconds) < 0.15
+
+
+def test_preview_keeps_gaps_that_have_sound_in_them(tmp_path):
+    """Words the transcriber missed (or a sound effect) aren't dead air: only real silence is cut."""
+    import wave
+    import numpy as np
+    from cuts import tighten_preview
+    sr = 16000
+    x = np.zeros(sr * 10, dtype=np.float32)
+    t = np.arange(sr * 10) / sr
+    for a, b in ((1, 2), (3, 4), (4.2, 4.8), (6, 7)):           # voices at 1-2, 3-4 and 6-7; 4.2-4.8 is unlabelled sound
+        x[int(a * sr):int(b * sr)] = 0.3 * np.sin(2 * np.pi * 220 * t[int(a * sr):int(b * sr)])
+    wav = str(tmp_path / "a.wav")
+    with wave.open(wav, "w") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr); w.writeframes((x * 32767).astype(np.int16).tobytes())
+    tr = {"segments": [{"words": [{"w": "one", "s": 1, "e": 2}, {"w": "two", "s": 3, "e": 4}, {"w": "three", "s": 6, "e": 7}]}]}
+    rep = tighten_preview(tr, 1, 7, audio=wav)
+    assert rep.keep == [(1, 2.115), (2.885, 7)]                  # silent 2-3 trimmed; 4-6 has sound in it, kept
+    assert tighten_preview(tr, 1, 7).keep == [(1, 2.115), (2.885, 4.115), (5.885, 7)]   # without audio: words only

@@ -227,7 +227,7 @@ def render(video, transcript, clip, out_dir, quiet=None, crop_top=0.125, guest=N
             open(script, "w", encoding="utf-8").write(";\n".join(fc))
             piece = os.path.join(work, f"piece{i:03d}.mkv")
             media.run([paths.ffmpeg(), "-y", "-ss", f"{a:.6f}", "-t", f"{b - a:.6f}", "-i", video,
-                       "-filter_complex_script", script, "-map", "[v]", "-map", "[a]",
+                       *media.filter_script(script), "-map", "[v]", "-map", "[a]",
                        "-c:v", "libx264", "-preset", "veryfast", "-crf", "14", "-pix_fmt", "yuv420p",
                        "-c:a", "pcm_s16le", "-ac", "2", "-ar", "48000", piece])
             listing.append("file '" + piece.replace("\\", "/").replace("'", "'\\''") + "'")
@@ -258,7 +258,7 @@ def render(video, transcript, clip, out_dir, quiet=None, crop_top=0.125, guest=N
         open(script, "w", encoding="utf-8").write(";\n".join(fc))
         final = os.path.join(out_dir, f"{clip['name']}.mp4")
         tmp = media.tmp_name(final)
-        media.run(cmd + ["-filter_complex_script", script, "-map", "[v]", "-map", "[a]", "-c:v", "libx264",
+        media.run(cmd + [*media.filter_script(script), "-map", "[v]", "-map", "[a]", "-c:v", "libx264",
                          "-preset", "medium", "-crf", "20", "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
                          "-movflags", "+faststart", tmp])
         media.commit(tmp, final)
